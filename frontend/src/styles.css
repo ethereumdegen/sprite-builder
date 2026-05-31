@@ -122,3 +122,41 @@ pre.logs {
   padding: 12px;
   word-break: break-all;
 }
+
+/* --- build diagnostics / log viewer --- */
+.logwrap { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.logbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; background: var(--panel); border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.logbar input { width: auto; margin-right: 4px; vertical-align: middle; }
+.logbar label { display: inline; margin: 0; color: var(--text); }
+.logbar button { padding: 4px 10px; font-size: 12px; }
+
+.logbox {
+  background: #010409;
+  padding: 10px 12px;
+  overflow: auto;
+  max-height: 480px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.log-line { white-space: pre-wrap; word-break: break-word; color: #c9d1d9; }
+.log-line.step { color: var(--accent); font-weight: 600; }
+.log-line.err  { color: var(--red); }
+.log-line.warn { color: var(--yellow); }
+.log-line.ok   { color: var(--green); font-weight: 600; }
+
+.pulse { color: var(--green); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+.stat-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 12px 0; }
+.stat { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
+.stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+.stat .v { margin-top: 2px; font-size: 13px; word-break: break-all; }
+@media (max-width: 640px) { .stat-grid { grid-template-columns: repeat(2, 1fr); } }
+
+.spin { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

@@ -157,11 +157,21 @@ For each `queued` build the worker:
 
 1. claims the row atomically (`FOR UPDATE SKIP LOCKED`),
 2. creates a sprite (`POST /v1/sprites`),
-3. runs a build script via `POST /v1/sprites/{name}/exec` that:
-   `git clone` the repo at the target commit (using the owner's GitHub token) →
-   `docker build` the `Dockerfile` → `docker run -d -p 8080:<container_port>`,
-4. makes the sprite URL public and writes
-   `status`, `url`, `logs`, and `metadata` back to the build row.
+3. uploads a build script and launches it **detached**, then polls its log file
+   and streams output into `builds.logs` (so the UI shows **live logs**). The
+   script: `git clone` the repo at the target commit → `docker build` the
+   `Dockerfile` → `docker run -d -p 8080:<container_port>`,
+4. treats the build as successful only when the script's exit code is `0` **and**
+   a success marker is present — not merely because the HTTP call returned 200,
+5. makes the sprite URL public and **probes it until it serves** (a non-5xx
+   response) before marking `succeeded`; if it never responds, the build is
+   `failed` with `metadata.ready=false`,
+6. on success, tears down the project's **older** sprites (blue-green: one live
+   deployment per project); on failure, deletes the just-created sprite.
+
+Two more safety nets: a **reaper** fails builds stuck in `running` for too long
+(crashed worker), and the GitHub token is passed via a **git credential helper**
+(never in the clone URL) and **redacted** from stored logs.
 
 **sprites.dev proxies external traffic to port `8080` inside the VM**, so the
 worker maps the container's port to host `8080`. Set a project's `container_port`
@@ -197,7 +207,11 @@ Both need the same env vars (`DATABASE_URL`, `GITHUB_*`, `SPRITES_*`,
 - Docker-in-sprite: the build script installs Docker if it's missing and starts
   `dockerd`. Depending on your sprite base image and network egress policy you
   may want to pre-bake Docker into a sprite checkpoint instead.
-- The GitHub token is embedded into the clone URL inside the exec script (over
-  HTTPS to the sprites API). Fine for a single-tenant tool; for multi-tenant use,
-  prefer short-lived tokens / a git credential helper and encrypt tokens at rest.
+- The GitHub token is used via a git credential helper (never placed in the clone
+  URL) and is redacted from stored logs. It is, however, still stored **plaintext
+  at rest** in `users.github_token` — encrypt it (and prefer a GitHub App /
+  short-lived tokens) before multi-tenant use.
+- Migrations run automatically on startup of both the server and the worker;
+  sqlx takes a Postgres advisory lock so concurrent startup is safe. You can also
+  run them explicitly as a deploy step: `cargo run --bin migrate`.
 ```

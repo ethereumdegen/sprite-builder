@@ -77,6 +77,22 @@ impl SpritesClient {
         Ok(ExecResult { status, output })
     }
 
+    /// Delete a sprite. DELETE /v1/sprites/{name}. Best-effort cleanup.
+    pub async fn delete_sprite(&self, name: &str) -> anyhow::Result<()> {
+        let resp = self
+            .http
+            .delete(self.url(&format!("/sprites/{name}")))
+            .header("Authorization", self.bearer())
+            .send()
+            .await?;
+        if !resp.status().is_success() && resp.status() != reqwest::StatusCode::NOT_FOUND {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            tracing::warn!("delete sprite {name} failed ({status}): {body}");
+        }
+        Ok(())
+    }
+
     /// Make the sprite's public URL reachable without sprite-org auth.
     /// Mirrors `sprite url update --auth public`.
     pub async fn set_url_public(&self, sprite: &str) -> anyhow::Result<()> {

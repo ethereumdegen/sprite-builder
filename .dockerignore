@@ -1,0 +1,7 @@
+# Keep the Docker build context small.
+**/target
+**/node_modules
+**/dist
+**/.git
+**/.env
+*.log
