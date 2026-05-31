@@ -1,0 +1,18 @@
+# rust
+/backend/target
+target/
+
+# node
+node_modules/
+/frontend/dist
+
+# env / secrets
+.env
+*.local
+
+# misc
+.DS_Store
+*.log
+
+# tsc
+*.tsbuildinfo

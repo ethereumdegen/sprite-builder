@@ -1,0 +1,9 @@
+# Build-worker service (Railway). Set this service's root directory to the repo
+# root so the Dockerfile can access ./backend.
+[build]
+builder = "dockerfile"
+dockerfilePath = "worker/Dockerfile"
+
+[deploy]
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3
