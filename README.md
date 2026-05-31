@@ -112,6 +112,31 @@ Open <http://localhost:5173>. (First Rust build takes a few minutes.)
 Run migrations explicitly if you want: `cd backend && cargo run --bin migrate`.
 The server also auto-applies them on startup.
 
+## Configuration (environment variables)
+
+All config is read from the environment (loaded from `.env` in dev). The
+**server** and **worker** build the same state, so both need the full set; the
+**migrate** bin only needs `DATABASE_URL`.
+
+| Variable               | Required | Default                      | Used by            | Description                                                                 |
+|------------------------|:--------:|------------------------------|--------------------|-----------------------------------------------------------------------------|
+| `DATABASE_URL`         | ✅       | —                            | server, worker, migrate | NeonDB/Postgres connection string (use `?sslmode=require`).            |
+| `GITHUB_CLIENT_ID`     | ✅       | —                            | server, worker     | GitHub OAuth app client ID.                                                 |
+| `GITHUB_CLIENT_SECRET` | ✅       | —                            | server, worker     | GitHub OAuth app client secret.                                             |
+| `SPRITES_TOKEN`        | ✅       | —                            | server, worker     | sprites.dev API token (`sprites.dev/account` or `sprite org auth`).         |
+| `SPRITES_ORG`          | ✅       | —                            | server, worker     | sprites org slug; builds the public URL `https://<sprite>-<org>.sprites.dev`. |
+| `BACKEND_URL`          |          | `http://localhost:5173`      | server             | Origin the **browser** hits; base for the OAuth callback. In dev = `:5173` (Vite proxies `/api`). In prod = your public https origin. |
+| `FRONTEND_URL`         |          | `http://localhost:5173`      | server             | Post-login redirect target and the CORS allow-origin.                       |
+| `BIND_ADDR`            |          | `0.0.0.0:8787`               | server             | Address/port the API server listens on.                                     |
+| `SPRITES_API_BASE`     |          | `https://api.sprites.dev/v1` | server, worker     | sprites REST base URL (override for a different API rev).                   |
+| `WORKER_POLL_SECS`     |          | `5`                          | worker             | How often the worker polls for queued builds.                               |
+| `DB_MAX_CONNECTIONS`   |          | `10`                         | server, worker     | Postgres pool size per process.                                             |
+| `STATIC_DIR`           |          | _(empty)_                    | server             | Dir of built SPA assets to serve. Empty in dev (Vite serves it); set to `/app/static` in the Docker image. |
+
+> ⚠️ The OAuth callback registered on the GitHub app must be exactly
+> `<BACKEND_URL>/api/auth/github/callback` — so `http://localhost:5173/api/auth/github/callback`
+> in dev, and `https://<your-domain>/api/auth/github/callback` in prod.
+
 ## Using the API
 
 ```bash
