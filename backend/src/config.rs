@@ -15,7 +15,6 @@ pub struct Config {
     pub github_client_secret: String,
 
     pub sprites_token: String,
-    pub sprites_api_base: String,
     /// Sprites org slug, used to construct the public `<sprite>-<org>.sprites.dev` URL.
     pub sprites_org: String,
 
@@ -43,7 +42,6 @@ impl Config {
             github_client_id: env("GITHUB_CLIENT_ID")?,
             github_client_secret: env("GITHUB_CLIENT_SECRET")?,
             sprites_token: env("SPRITES_TOKEN")?,
-            sprites_api_base: env_or("SPRITES_API_BASE", "https://api.sprites.dev/v1"),
             sprites_org: env("SPRITES_ORG")?,
             worker_poll_secs: env_or("WORKER_POLL_SECS", "5")
                 .parse()

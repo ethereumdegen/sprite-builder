@@ -3,6 +3,10 @@ use std::sync::Arc;
 
 use crate::config::Config;
 
+/// Base URL of the Sprites.dev REST API. Hardcoded (not configurable) — the
+/// public service always lives here.
+const SPRITES_API_BASE: &str = "https://api.sprites.dev/v1";
+
 /// Thin client over the Sprites.dev REST API (https://docs.sprites.dev/api/).
 #[derive(Clone)]
 pub struct SpritesClient {
@@ -28,7 +32,7 @@ impl SpritesClient {
     }
 
     fn url(&self, path: &str) -> String {
-        format!("{}{}", self.config.sprites_api_base, path)
+        format!("{}{}", SPRITES_API_BASE, path)
     }
 
     fn bearer(&self) -> String {

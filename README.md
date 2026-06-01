@@ -128,7 +128,6 @@ All config is read from the environment (loaded from `.env` in dev). The
 | `BACKEND_URL`          |          | `http://localhost:5173`      | server             | Origin the **browser** hits; base for the OAuth callback. In dev = `:5173` (Vite proxies `/api`). In prod = your public https origin. |
 | `FRONTEND_URL`         |          | `http://localhost:5173`      | server             | Post-login redirect target and the CORS allow-origin.                       |
 | `BIND_ADDR`            |          | `0.0.0.0:8787`               | server             | Address/port the API server listens on.                                     |
-| `SPRITES_API_BASE`     |          | `https://api.sprites.dev/v1` | server, worker     | sprites REST base URL (override for a different API rev).                   |
 | `WORKER_POLL_SECS`     |          | `5`                          | worker             | How often the worker polls for queued builds.                               |
 | `DB_MAX_CONNECTIONS`   |          | `10`                         | server, worker     | Postgres pool size per process.                                             |
 | `STATIC_DIR`           |          | _(empty)_                    | server             | Dir of built SPA assets to serve. Empty in dev (Vite serves it); set to `/app/static` in the Docker image. |
