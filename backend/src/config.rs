@@ -36,7 +36,12 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         Ok(Self {
             database_url: env("DATABASE_URL")?,
-            bind_addr: env_or("BIND_ADDR", "0.0.0.0:8787"),
+            // Platforms like Railway inject PORT and route traffic there, so
+            // honor it first; then an explicit BIND_ADDR; then the local default.
+            bind_addr: match std::env::var("PORT") {
+                Ok(port) => format!("0.0.0.0:{port}"),
+                Err(_) => env_or("BIND_ADDR", "0.0.0.0:8787"),
+            },
             backend_url: env_or("BACKEND_URL", "http://localhost:8787"),
             frontend_url: env_or("FRONTEND_URL", "http://localhost:5173"),
             github_client_id: env("GITHUB_CLIENT_ID")?,
