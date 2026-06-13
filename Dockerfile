@@ -23,6 +23,8 @@ COPY --from=backend /app/backend/target/release/sprite-builder /usr/local/bin/sp
 COPY --from=backend /app/backend/migrations /app/migrations
 COPY --from=frontend /app/frontend/dist /app/static
 ENV STATIC_DIR=/app/static
-ENV BIND_ADDR=0.0.0.0:8787
-EXPOSE 8787
+# The server honors $PORT first (Railway injects it), then BIND_ADDR. This is
+# the fallback when PORT is unset; on Railway PORT (e.g. 8080) takes precedence.
+ENV BIND_ADDR=0.0.0.0:8080
+EXPOSE 8080
 CMD ["sprite-builder"]
