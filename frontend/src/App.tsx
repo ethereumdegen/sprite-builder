@@ -5,6 +5,7 @@ import Login from "./pages/Login";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
+import DocsPage from "./pages/DocsPage";
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="/" element={<ProjectsPage />} />
           <Route path="/projects/:id" element={<ProjectPage />} />
           <Route path="/keys" element={<ApiKeysPage />} />
+          <Route path="/docs" element={<DocsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
@@ -53,6 +55,7 @@ function Nav({ user, onLogout }: { user: User; onLogout: () => void }) {
       <span className="brand">🛠️ Sprite Builder</span>
       <Link to="/">Projects</Link>
       <Link to="/keys">API Keys</Link>
+      <Link to="/docs">Docs</Link>
       <span className="spacer" />
       {user.avatar_url && <img className="avatar" src={user.avatar_url} alt="" />}
       <span className="muted">{user.github_login}</span>
