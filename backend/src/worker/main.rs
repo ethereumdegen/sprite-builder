@@ -11,7 +11,9 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = Config::from_env()?;
+    // The worker doesn't serve the OAuth login flow, so it skips the GitHub
+    // OAuth env vars (GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET).
+    let config = Config::from_env_worker()?;
     let state = AppState::from_config(config).await?;
 
     // #9 — run migrations here too. sqlx takes a Postgres advisory lock during

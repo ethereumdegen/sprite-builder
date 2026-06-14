@@ -11,8 +11,10 @@ pub struct Config {
     /// Public base URL of the frontend (where we redirect after login).
     pub frontend_url: String,
 
-    pub github_client_id: String,
-    pub github_client_secret: String,
+    /// GitHub OAuth credentials. Only the API server (which serves the login
+    /// flow) requires these; the background worker leaves them `None`.
+    pub github_client_id: Option<String>,
+    pub github_client_secret: Option<String>,
 
     pub sprites_token: String,
     /// Sprites org slug, used to construct the public `<sprite>-<org>.sprites.dev` URL.
@@ -33,7 +35,28 @@ fn env_or(key: &str, default: &str) -> String {
 }
 
 impl Config {
+    /// Config for the API server. The GitHub OAuth credentials are required
+    /// because the server runs the login flow.
     pub fn from_env() -> anyhow::Result<Self> {
+        Self::load(true)
+    }
+
+    /// Config for the background build worker. The worker never serves the OAuth
+    /// login flow, so the GitHub OAuth credentials are not required.
+    pub fn from_env_worker() -> anyhow::Result<Self> {
+        Self::load(false)
+    }
+
+    fn load(require_oauth: bool) -> anyhow::Result<Self> {
+        // Required on the server, optional on the worker.
+        let oauth = |key: &str| -> anyhow::Result<Option<String>> {
+            if require_oauth {
+                Ok(Some(env(key)?))
+            } else {
+                Ok(std::env::var(key).ok())
+            }
+        };
+
         Ok(Self {
             database_url: env("DATABASE_URL")?,
             // Platforms like Railway inject PORT and route traffic there, so
@@ -44,8 +67,8 @@ impl Config {
             },
             backend_url: env_or("BACKEND_URL", "http://localhost:8787"),
             frontend_url: env_or("FRONTEND_URL", "http://localhost:5173"),
-            github_client_id: env("GITHUB_CLIENT_ID")?,
-            github_client_secret: env("GITHUB_CLIENT_SECRET")?,
+            github_client_id: oauth("GITHUB_CLIENT_ID")?,
+            github_client_secret: oauth("GITHUB_CLIENT_SECRET")?,
             sprites_token: env("SPRITES_TOKEN")?,
             sprites_org: env("SPRITES_ORG")?,
             worker_poll_secs: env_or("WORKER_POLL_SECS", "5")
@@ -60,5 +83,20 @@ impl Config {
 
     pub fn github_callback_url(&self) -> String {
         format!("{}/api/auth/github/callback", self.backend_url)
+    }
+
+    /// The configured GitHub OAuth credentials `(client_id, client_secret)`.
+    /// Errors if they weren't loaded — which only happens on a misconfigured
+    /// server deploy, since `from_env` requires them.
+    pub fn github_oauth(&self) -> anyhow::Result<(&str, &str)> {
+        let id = self
+            .github_client_id
+            .as_deref()
+            .context("GITHUB_CLIENT_ID not configured")?;
+        let secret = self
+            .github_client_secret
+            .as_deref()
+            .context("GITHUB_CLIENT_SECRET not configured")?;
+        Ok((id, secret))
     }
 }

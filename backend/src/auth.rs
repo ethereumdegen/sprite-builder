@@ -123,12 +123,13 @@ where
 // GitHub OAuth
 // ---------------------------------------------------------------------------
 
-pub async fn github_login(State(app): State<AppState>, jar: CookieJar) -> impl IntoResponse {
+pub async fn github_login(State(app): State<AppState>, jar: CookieJar) -> AppResult<impl IntoResponse> {
+    let (client_id, _) = app.config.github_oauth()?;
     let state = random_token(16);
     let scope = "read:user repo";
     let authorize = format!(
         "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope={}&state={}",
-        urlencoding::encode(&app.config.github_client_id),
+        urlencoding::encode(client_id),
         urlencoding::encode(&app.config.github_callback_url()),
         urlencoding::encode(scope),
         urlencoding::encode(&state),
@@ -140,7 +141,7 @@ pub async fn github_login(State(app): State<AppState>, jar: CookieJar) -> impl I
     state_cookie.set_same_site(SameSite::Lax);
     state_cookie.set_max_age(time::Duration::minutes(10));
 
-    (jar.add(state_cookie), Redirect::to(&authorize))
+    Ok((jar.add(state_cookie), Redirect::to(&authorize)))
 }
 
 #[derive(Deserialize)]
@@ -160,10 +161,11 @@ pub async fn github_callback(
         return Err(AppError::bad_request("invalid oauth state"));
     }
 
+    let (client_id, client_secret) = app.config.github_oauth()?;
     let token = github::exchange_code(
         &app.http,
-        &app.config.github_client_id,
-        &app.config.github_client_secret,
+        client_id,
+        client_secret,
         &q.code,
         &app.config.github_callback_url(),
     )
