@@ -5,5 +5,10 @@ builder = "dockerfile"
 dockerfilePath = "worker/Dockerfile"
 
 [deploy]
+# The worker binary runs a tiny liveness server on $PORT that answers
+# /api/health (see worker/main.rs), so the platform can health-check it like
+# any other service.
+healthcheckPath = "/api/health"
+healthcheckTimeout = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
