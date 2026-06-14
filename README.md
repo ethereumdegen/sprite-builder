@@ -115,14 +115,17 @@ The server also auto-applies them on startup.
 ## Configuration (environment variables)
 
 All config is read from the environment (loaded from `.env` in dev). The
-**server** and **worker** build the same state, so both need the full set; the
-**migrate** bin only needs `DATABASE_URL`.
+**server** needs the full set. The **worker** never serves the OAuth login flow,
+so it needs only `DATABASE_URL`, `SPRITES_TOKEN`, and `SPRITES_ORG` (plus the
+optional `WORKER_POLL_SECS` / `DB_MAX_CONNECTIONS`) — it does **not** need
+`GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`. The **migrate** bin only needs
+`DATABASE_URL`.
 
 | Variable               | Required | Default                      | Used by            | Description                                                                 |
 |------------------------|:--------:|------------------------------|--------------------|-----------------------------------------------------------------------------|
 | `DATABASE_URL`         | ✅       | —                            | server, worker, migrate | NeonDB/Postgres connection string (use `?sslmode=require`).            |
-| `GITHUB_CLIENT_ID`     | ✅       | —                            | server, worker     | GitHub OAuth app client ID.                                                 |
-| `GITHUB_CLIENT_SECRET` | ✅       | —                            | server, worker     | GitHub OAuth app client secret.                                             |
+| `GITHUB_CLIENT_ID`     | ✅       | —                            | server             | GitHub OAuth app client ID.                                                 |
+| `GITHUB_CLIENT_SECRET` | ✅       | —                            | server             | GitHub OAuth app client secret.                                             |
 | `SPRITES_TOKEN`        | ✅       | —                            | server, worker     | sprites.dev API token (`sprites.dev/account` or `sprite org auth`).         |
 | `SPRITES_ORG`          | ✅       | —                            | server, worker     | sprites org slug; builds the public URL `https://<sprite>-<org>.sprites.dev`. |
 | `BACKEND_URL`          |          | `http://localhost:5173`      | server             | Origin the **browser** hits; base for the OAuth callback. In dev = `:5173` (Vite proxies `/api`). In prod = your public https origin. |
@@ -217,9 +220,19 @@ Two services off the same repo:
 - **Build worker** — `worker/railway.toml` / `worker/Dockerfile`
   (set the service root directory to the repo root).
 
-Both need the same env vars (`DATABASE_URL`, `GITHUB_*`, `SPRITES_*`,
-`SPRITES_ORG`). In production set `BACKEND_URL` and `FRONTEND_URL` to your real
-`https://` origin and update the GitHub OAuth callback URL to match.
+Each service gets its own variables (Railway does not share them across
+services — use reference variables to keep them in sync):
+
+- **Worker** needs only `DATABASE_URL`, `SPRITES_TOKEN`, `SPRITES_ORG` (plus
+  optional `WORKER_POLL_SECS` / `DB_MAX_CONNECTIONS`). It does **not** need the
+  GitHub OAuth vars. Example references:
+  `DATABASE_URL = ${{Postgres.DATABASE_URL}}`,
+  `SPRITES_TOKEN = ${{<server-service>.SPRITES_TOKEN}}`,
+  `SPRITES_ORG = ${{<server-service>.SPRITES_ORG}}`.
+- **Server** additionally needs `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`,
+  `BACKEND_URL`, and `FRONTEND_URL`. In production set `BACKEND_URL` /
+  `FRONTEND_URL` to your real `https://` origin and update the GitHub OAuth
+  callback URL to match.
 
 ## Notes & assumptions
 
