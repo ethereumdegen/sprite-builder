@@ -104,7 +104,7 @@ async fn reap_stale(db: &PgPool) -> sqlx::Result<u64> {
     let sql = format!(
         r#"UPDATE builds
            SET status = 'failed',
-               error = 'build did not finish in time (worker lost or timed out); marked stale',
+               error = 'build orphaned: the worker stopped updating it (likely a worker restart/redeploy mid-build); marked stale by the reaper',
                finished_at = now(), updated_at = now()
            WHERE status = 'running'
              AND started_at < now() - interval '{STALE_MINUTES} minutes'"#
@@ -282,17 +282,34 @@ echo $? >/var/log/sb-build.done"#;
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
 
-        let raw = match app.sprites.exec(sprite, &poll_cmd).await {
-            Ok(res) => {
+        // Bound each poll: the shared HTTP client's timeout is 900s, so without
+        // this a single wedged exec freezes the whole loop for ~15 min with no
+        // output and no heartbeat — which is exactly what dockerd starting inside
+        // the sprite triggers (it rewrites iptables and can sever the exec
+        // channel). Treat a timed-out poll as a poll error so it surfaces in ~60s
+        // and the build fails fast with a real cause instead of riding the 30-min
+        // stale reaper.
+        let outcome = match tokio::time::timeout(EXEC_TIMEOUT, app.sprites.exec(sprite, &poll_cmd))
+            .await
+        {
+            Ok(Ok(res)) => Ok(res.output),
+            Ok(Err(e)) => Err(format!("{e:#}")),
+            Err(_) => Err(format!(
+                "log poll exec timed out after {}s (sprite exec channel unresponsive)",
+                EXEC_TIMEOUT.as_secs()
+            )),
+        };
+        let raw = match outcome {
+            Ok(out) => {
                 poll_errors = 0;
-                res.output
+                out
             }
             Err(e) => {
                 // Don't swallow it: log it, surface it in the panel, and give up
                 // after enough consecutive failures rather than spinning silently.
                 poll_errors += 1;
                 tracing::warn!(
-                    "build {} log poll failed ({poll_errors}/{MAX_POLL_ERRORS}): {e:#}",
+                    "build {} log poll failed ({poll_errors}/{MAX_POLL_ERRORS}): {e}",
                     build.id
                 );
                 if poll_errors >= MAX_POLL_ERRORS {
