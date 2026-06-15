@@ -162,8 +162,16 @@ async fn run_build(app: &AppState, build: Build) -> anyhow::Result<()> {
     .await?;
 
     let sprite_name = generate_sprite_name(&app.db, build.id).await?;
-    sqlx::query("UPDATE builds SET sprite_name = $1, updated_at = now() WHERE id = $2")
+    // Surface the public URL immediately. It's derived purely from the sprite
+    // name, so it's known the moment we pick the name — no need to wait for the
+    // build to finish. It won't actually serve until the container is up and the
+    // URL is made public at the end; the separate "Reachable" indicator tracks
+    // that. finish() rewrites url to its final value (kept on success, cleared on
+    // build failure).
+    let url = app.sprites.public_url(&sprite_name);
+    sqlx::query("UPDATE builds SET sprite_name = $1, url = $2, updated_at = now() WHERE id = $3")
         .bind(&sprite_name)
+        .bind(&url)
         .bind(build.id)
         .execute(&app.db)
         .await?;
@@ -182,8 +190,9 @@ async fn run_build(app: &AppState, build: Build) -> anyhow::Result<()> {
     match run_on_sprite(app, &sprite_name, &project, &owner, &build).await {
         Ok(logs) => {
             // Built OK. Promote it: make the URL public and confirm it serves (#3).
+            // `url` was already computed and persisted up front (it's derived from
+            // the sprite name); reuse it here.
             let _ = app.sprites.set_url_public(&sprite_name).await;
-            let url = app.sprites.public_url(&sprite_name);
 
             if probe_until_ready(&app.http, &url).await {
                 finish(&app.db, build.id, "succeeded", Some(&url), &logs, None, base_meta(true.into())).await?;
