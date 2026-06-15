@@ -40,3 +40,4 @@ Deciders, then Context / Decision / Consequences / Enforcement.
 | ADR | Title |
 |----:|-------|
 | [0017](0017-no-committed-sqlx-offline-cache.md) | Use runtime SQLx queries; do not commit a `.sqlx` offline cache |
+| [0018](0018-healthcheck-independent-of-database.md) | Healthcheck comes up fast, independent of the database |
