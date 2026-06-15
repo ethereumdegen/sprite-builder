@@ -394,6 +394,16 @@ if ! docker info >/dev/null 2>&1; then
   echo "==> starting dockerd"
   ( dockerd >/tmp/dockerd.log 2>&1 & ) || true
   for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  # If the daemon never came up, surface *why* (its startup log) and fail here
+  # with a clear cause, instead of letting `docker build` hit the opaque
+  # "cannot connect to /var/run/docker.sock" a few lines down.
+  if ! docker info >/dev/null 2>&1; then
+    echo "==> ERROR: dockerd did not become ready within 30s. /tmp/dockerd.log follows:"
+    echo "-------------------- dockerd.log --------------------"
+    cat /tmp/dockerd.log 2>/dev/null || echo "(no /tmp/dockerd.log was written — dockerd may have failed to exec)"
+    echo "-----------------------------------------------------"
+    exit 1
+  fi
 fi
 
 export SB_GH_TOKEN='{token}'
