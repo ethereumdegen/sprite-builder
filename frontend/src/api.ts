@@ -77,6 +77,15 @@ export interface RuntimeLogs {
   message: string | null;
 }
 
+// URL visibility of a build's deployment. `public` = anyone with the link;
+// otherwise org members only. `available` is false with no live sprite.
+export interface UrlVisibility {
+  available: boolean;
+  public: boolean;
+  url: string | null;
+  message: string | null;
+}
+
 // --- admin dashboard ---
 
 export interface AdminStats {
@@ -184,6 +193,12 @@ export const api = {
       body: JSON.stringify({ commit_sha }),
     }),
   runtimeLogs: (buildId: string) => req<RuntimeLogs>(`/api/builds/${buildId}/runtime-logs`),
+  urlVisibility: (buildId: string) => req<UrlVisibility>(`/api/builds/${buildId}/url-visibility`),
+  setUrlVisibility: (buildId: string, isPublic: boolean) =>
+    req<UrlVisibility>(`/api/builds/${buildId}/url-visibility`, {
+      method: "POST",
+      body: JSON.stringify({ public: isPublic }),
+    }),
 
   // per-project environment variables
   envVars: (projectId: string) => req<ProjectEnvVar[]>(`/api/projects/${projectId}/env`),

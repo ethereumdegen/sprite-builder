@@ -211,24 +211,53 @@ impl SpritesClient {
         Ok(())
     }
 
-    /// Make the sprite's public URL reachable without sprite-org auth.
-    /// Mirrors `sprite url update --auth public`: PUT /v1/sprites/{name} with the
-    /// nested url_settings. (Sprites created via `create_sprite` are already
-    /// public; this stays as a belt-and-suspenders call and backs the admin
-    /// "make public" action.)
-    pub async fn set_url_public(&self, sprite: &str) -> anyhow::Result<()> {
+    /// The sprite's current URL auth mode ("public" | "sprite"), if reported.
+    /// GET /v1/sprites/{name} → url_settings.auth.
+    pub async fn url_auth(&self, sprite: &str) -> anyhow::Result<Option<String>> {
+        let resp = self
+            .http
+            .get(self.url(&format!("/sprites/{sprite}")))
+            .header("Authorization", self.bearer())
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("get sprite failed ({})", resp.status()));
+        }
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        Ok(body
+            .get("url_settings")
+            .and_then(|u| u.get("auth"))
+            .and_then(|a| a.as_str())
+            .map(str::to_string))
+    }
+
+    /// Set the sprite's URL auth mode. `public=true` → "public" (anyone with the
+    /// link), `false` → "sprite" (org members only). Mirrors `sprite url update
+    /// --auth <mode>`: PUT /v1/sprites/{name} with the nested url_settings.
+    pub async fn set_url_auth(&self, sprite: &str, public: bool) -> anyhow::Result<()> {
+        let auth = if public { "public" } else { "sprite" };
         let resp = self
             .http
             .put(self.url(&format!("/sprites/{sprite}")))
             .header("Authorization", self.bearer())
-            .json(&serde_json::json!({ "url_settings": { "auth": "public" } }))
+            .json(&serde_json::json!({ "url_settings": { "auth": auth } }))
             .send()
             .await?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            // Non-fatal: the build may still be reachable to org members.
-            tracing::warn!("set_url_public failed ({status}): {body}");
+            return Err(anyhow!("set url auth failed ({status}): {body}"));
+        }
+        Ok(())
+    }
+
+    /// Make the sprite's URL reachable without org auth. Non-fatal wrapper around
+    /// [`set_url_auth`] used by the worker (a build is still useful org-only) and
+    /// the admin "make public" action. Sprites created via `create_sprite` are
+    /// already public; this re-asserts it.
+    pub async fn set_url_public(&self, sprite: &str) -> anyhow::Result<()> {
+        if let Err(e) = self.set_url_auth(sprite, true).await {
+            tracing::warn!("set_url_public failed: {e}");
         }
         Ok(())
     }

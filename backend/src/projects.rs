@@ -343,3 +343,78 @@ pub async fn runtime_logs(
         message: None,
     }))
 }
+
+// ---------------------------------------------------------------------------
+// URL visibility (public vs org-only) for a build's deployment
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct UrlVisibility {
+    /// Whether we could read/affect the live sprite at all.
+    pub available: bool,
+    /// true = anyone with the link; false = org members only ("sprite" auth).
+    pub public: bool,
+    pub url: Option<String>,
+    pub message: Option<String>,
+}
+
+pub async fn get_url_visibility(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<UrlVisibility>> {
+    let build = load_owned_build(&app, user.id, id).await?;
+    let sprite = match &build.sprite_name {
+        Some(s) => s.clone(),
+        None => {
+            return Ok(Json(UrlVisibility {
+                available: false,
+                public: false,
+                url: build.url.clone(),
+                message: Some("no deployment yet".into()),
+            }))
+        }
+    };
+    match tokio::time::timeout(RUNTIME_LOGS_TIMEOUT, app.sprites.url_auth(&sprite)).await {
+        Ok(Ok(auth)) => Ok(Json(UrlVisibility {
+            available: true,
+            public: auth.as_deref() == Some("public"),
+            url: build.url.clone(),
+            message: None,
+        })),
+        _ => Ok(Json(UrlVisibility {
+            available: false,
+            public: false,
+            url: build.url.clone(),
+            message: Some("could not reach deployment".into()),
+        })),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SetVisibilityBody {
+    pub public: bool,
+}
+
+pub async fn set_url_visibility(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<SetVisibilityBody>,
+) -> AppResult<Json<UrlVisibility>> {
+    let build = load_owned_build(&app, user.id, id).await?;
+    let sprite = build
+        .sprite_name
+        .clone()
+        .ok_or_else(|| AppError::bad_request("this build has no deployment to change"))?;
+    tokio::time::timeout(RUNTIME_LOGS_TIMEOUT, app.sprites.set_url_auth(&sprite, body.public))
+        .await
+        .map_err(|_| AppError::bad_request("timed out updating URL visibility"))?
+        .map_err(|e| AppError::bad_request(format!("could not update URL visibility: {e}")))?;
+    Ok(Json(UrlVisibility {
+        available: true,
+        public: body.public,
+        url: build.url.clone(),
+        message: None,
+    }))
+}

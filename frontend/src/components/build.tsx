@@ -70,9 +70,12 @@ export function BuildBody({ build, now }: { build: Build; now: number }) {
         k="URL"
         v={
           build.url ? (
-            <a href={build.url} target="_blank" rel="noreferrer">
-              {build.url}
-            </a>
+            <>
+              <a href={build.url} target="_blank" rel="noreferrer">
+                {build.url}
+              </a>
+              <UrlVisibilityControl build={build} />
+            </>
           ) : (
             "—"
           )
@@ -93,6 +96,52 @@ export function BuildBody({ build, now }: { build: Build; now: number }) {
 
       <LogTabs build={build} />
     </>
+  );
+}
+
+/// Shows whether the deployment's URL is public (anyone) or org-only, with a
+/// toggle. Only meaningful for a succeeded build with a live sprite.
+function UrlVisibilityControl({ build }: { build: Build }) {
+  const vis = useBuilds((s) => s.visibilityById[build.id]);
+  const loadVisibility = useBuilds((s) => s.loadVisibility);
+  const setVisibility = useBuilds((s) => s.setVisibility);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (build.status === "succeeded") loadVisibility(build.id).catch(() => {});
+  }, [build.id, build.status, loadVisibility]);
+
+  if (build.status !== "succeeded" || !vis) return null;
+  if (!vis.available) {
+    return <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{vis.message || "visibility unavailable"}</div>;
+  }
+
+  const toggle = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await setVisibility(build.id, !vis.public);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="row" style={{ alignItems: "center", gap: 10, marginTop: 6 }}>
+      <span className={"badge " + (vis.public ? "succeeded" : "queued")}>
+        {vis.public ? "🌐 Public" : "🔒 Org only"}
+      </span>
+      <span className="muted" style={{ fontSize: 12 }}>
+        {vis.public ? "anyone with the link can open it" : "only your org can open it"}
+      </span>
+      <button className="secondary" onClick={toggle} disabled={busy}>
+        {busy ? "Updating…" : vis.public ? "Make private" : "Make public"}
+      </button>
+      {err && <span style={{ color: "var(--red)", fontSize: 12 }}>{err}</span>}
+    </div>
   );
 }
 

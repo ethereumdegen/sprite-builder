@@ -123,6 +123,10 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/builds/:id", get(projects::get_build))
         .route("/api/builds/:id/runtime-logs", get(projects::runtime_logs))
+        .route(
+            "/api/builds/:id/url-visibility",
+            get(projects::get_url_visibility).post(projects::set_url_visibility),
+        )
         // admin dashboard (capability-gated by the AdminUser extractor)
         .route("/api/admin/stats", get(admin::stats))
         .route("/api/admin/builds", get(admin::builds))
