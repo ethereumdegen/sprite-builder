@@ -29,6 +29,7 @@ export default function AdminPage() {
     loadBuilds,
     loadUsers,
     setRole,
+    rebuild,
   } = useAdmin();
   const me = useAuth((s) => s.user);
 
@@ -93,6 +94,7 @@ export default function AdminPage() {
                 <th>Created</th>
                 <th>Duration</th>
                 <th>Result</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -121,6 +123,15 @@ export default function AdminPage() {
                     ) : (
                       "—"
                     )}
+                  </td>
+                  <td>
+                    <button
+                      className="secondary"
+                      title={`Re-run commit ${b.commit_sha.slice(0, 10)}`}
+                      onClick={() => rebuild(b.id).catch(() => {})}
+                    >
+                      Rebuild
+                    </button>
                   </td>
                 </tr>
               ))}

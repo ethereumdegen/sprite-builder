@@ -13,6 +13,7 @@ interface AdminState {
   loadBuilds: () => Promise<void>;
   loadUsers: () => Promise<void>;
   setRole: (id: string, role: "user" | "admin") => Promise<void>;
+  rebuild: (buildId: string) => Promise<void>;
 }
 
 export const useAdmin = create<AdminState>((set, get) => ({
@@ -39,5 +40,11 @@ export const useAdmin = create<AdminState>((set, get) => ({
   setRole: async (id, role) => {
     const updated = await api.adminSetRole(id, role);
     set((s) => ({ users: s.users.map((u) => (u.id === id ? updated : u)) }));
+  },
+  rebuild: async (buildId) => {
+    const created = await api.adminRebuild(buildId);
+    // Prepend the new queued build so it shows immediately; the 5s refresh
+    // will then keep its status live.
+    set((s) => ({ builds: [created, ...s.builds] }));
   },
 }));

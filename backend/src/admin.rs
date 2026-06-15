@@ -115,6 +115,60 @@ pub async fn builds(
     Ok(Json(rows))
 }
 
+/// Re-run an existing build's *exact commit* as a fresh `queued` build that the
+/// worker picks up. Reuses the stored `commit_sha` — no GitHub call — so an admin
+/// can rebuild any user's sprite without needing that user's token. The worker
+/// loads the project owner's token when it clones, so the build runs as the owner.
+pub async fn rebuild(
+    State(app): State<AppState>,
+    _admin: AdminUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<AdminBuild>> {
+    let src = sqlx::query_as::<_, (Uuid, String)>(
+        r#"SELECT project_id, commit_sha FROM builds WHERE id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(&app.db)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let new_id: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO builds (project_id, commit_sha, status)
+           VALUES ($1, $2, 'queued')
+           RETURNING id"#,
+    )
+    .bind(src.0)
+    .bind(src.1)
+    .fetch_one(&app.db)
+    .await?;
+
+    let row = sqlx::query_as::<_, AdminBuild>(
+        r#"SELECT
+              b.id            AS id,
+              b.status        AS status,
+              b.commit_sha    AS commit_sha,
+              b.sprite_name   AS sprite_name,
+              b.url           AS url,
+              b.error         AS error,
+              b.created_at    AS created_at,
+              b.started_at    AS started_at,
+              b.finished_at   AS finished_at,
+              b.project_id    AS project_id,
+              p.name          AS project_name,
+              p.repo_full_name AS repo_full_name,
+              u.github_login  AS owner_login
+           FROM builds b
+           JOIN projects p ON p.id = b.project_id
+           JOIN users u    ON u.id = p.user_id
+           WHERE b.id = $1"#,
+    )
+    .bind(new_id.0)
+    .fetch_one(&app.db)
+    .await?;
+
+    Ok(Json(row))
+}
+
 // ---------------------------------------------------------------------------
 // users + role management
 // ---------------------------------------------------------------------------

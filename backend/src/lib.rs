@@ -115,6 +115,7 @@ pub fn build_router(state: AppState) -> Router {
         // admin dashboard (capability-gated by the AdminUser extractor)
         .route("/api/admin/stats", get(admin::stats))
         .route("/api/admin/builds", get(admin::builds))
+        .route("/api/admin/builds/:id/rebuild", post(admin::rebuild))
         .route("/api/admin/users", get(admin::users))
         .route("/api/admin/users/:id/role", patch(admin::set_role))
         .layer(cors)

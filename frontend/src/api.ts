@@ -167,6 +167,8 @@ export const api = {
     req<AdminBuild[]>(
       `/api/admin/builds${status ? `?status=${encodeURIComponent(status)}` : ""}`
     ),
+  adminRebuild: (buildId: string) =>
+    req<AdminBuild>(`/api/admin/builds/${buildId}/rebuild`, { method: "POST" }),
   adminUsers: () => req<AdminUser[]>("/api/admin/users"),
   adminSetRole: (id: string, role: "user" | "admin") =>
     req<AdminUser>(`/api/admin/users/${id}/role`, {

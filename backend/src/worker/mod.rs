@@ -26,6 +26,20 @@ const BUILD_TIMEOUT: Duration = Duration::from_secs(1200);
 /// How often we poll the in-sprite build log.
 const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
+/// Consecutive failed log polls before we declare the sprite unreachable and
+/// fail the build. Without this, transient errors are swallowed forever and a
+/// wedged exec channel only surfaces at BUILD_TIMEOUT (20 min) with no logs.
+const MAX_POLL_ERRORS: u32 = 10;
+
+/// Cap on sprite provisioning (`POST /sprites`). Without this the call rides the
+/// global 900s HTTP timeout, so a wedged provision freezes the build on
+/// "creating sprite" for 15 min with no signal.
+const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Cap on a single setup exec (upload script / launch). The build itself runs
+/// detached and is bounded by BUILD_TIMEOUT, not this.
+const EXEC_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// A `running` build older than this is considered abandoned (worker crashed)
 /// and gets reaped. Must exceed BUILD_TIMEOUT.
 const STALE_MINUTES: i32 = 30;
@@ -200,12 +214,23 @@ async fn run_on_sprite(
     build: &Build,
 ) -> Result<String, (String, String)> {
     let token = owner.github_token.clone();
-    let mut head = format!("==> creating sprite {sprite}\n");
+    let mut head = format!("==> creating sprite {sprite} (provisioning VM)\n");
     let _ = update_logs(&app.db, build.id, &head).await;
 
-    if let Err(e) = app.sprites.create_sprite(sprite).await {
-        return Err((head, format!("create sprite failed: {e}")));
+    // Bound provisioning so a wedged Sprites API surfaces in ~2 min, not 15.
+    match tokio::time::timeout(CREATE_TIMEOUT, app.sprites.create_sprite(sprite)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err((head, format!("create sprite failed: {e}"))),
+        Err(_) => {
+            let msg = format!("sprite did not provision within {}s", CREATE_TIMEOUT.as_secs());
+            head.push_str(&format!("==> {msg}\n"));
+            return Err((head, msg));
+        }
     }
+    // Persist each phase as it happens, so the log panel reflects progress
+    // instead of freezing on "creating sprite" until the first poll lands.
+    head.push_str("==> sprite created; uploading build script\n");
+    let _ = update_logs(&app.db, build.id, &head).await;
 
     // Ship the build script as base64 (avoids any shell-quoting hazards).
     let script = build_script(project, build, &token, sprite);
@@ -224,7 +249,8 @@ echo launched"#;
         head.push_str("==> failed to launch build\n");
         return Err((head, format!("launch failed: {e}")));
     }
-    head.push_str("==> build started\n");
+    head.push_str("==> build started; streaming logs\n");
+    let _ = update_logs(&app.db, build.id, &head).await;
 
     // Poll the log file until the build records an exit code (or we time out).
     let poll_cmd = format!(
@@ -232,12 +258,32 @@ echo launched"#;
          if [ -f /var/log/sb-build.done ]; then printf '\\n{DONE_MARKER}'; cat /var/log/sb-build.done; fi"
     );
     let deadline = Instant::now() + BUILD_TIMEOUT;
+    let mut poll_errors = 0u32;
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
 
         let raw = match app.sprites.exec(sprite, &poll_cmd).await {
-            Ok(res) => res.output,
-            Err(_) => continue, // transient; retry until deadline
+            Ok(res) => {
+                poll_errors = 0;
+                res.output
+            }
+            Err(e) => {
+                // Don't swallow it: log it, surface it in the panel, and give up
+                // after enough consecutive failures rather than spinning silently.
+                poll_errors += 1;
+                tracing::warn!(
+                    "build {} log poll failed ({poll_errors}/{MAX_POLL_ERRORS}): {e:#}",
+                    build.id
+                );
+                if poll_errors >= MAX_POLL_ERRORS {
+                    let logs = format!(
+                        "{head}==> lost contact with sprite while streaming logs: {e}\n"
+                    );
+                    let _ = update_logs(&app.db, build.id, &logs).await;
+                    return Err((logs, format!("sprite unreachable after {poll_errors} failed log polls: {e}")));
+                }
+                continue;
+            }
         };
         let (body, exit) = parse_poll(&raw);
         let logs = format!("{head}{}", redact(&body, &token));
@@ -262,6 +308,10 @@ fn build_script(project: &Project, build: &Build, token: &str, image: &str) -> S
     format!(
         r#"set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
+# Stream the docker build as plain step-by-step text (not the animated TTY UI),
+# so every layer/step lands in the polled log file like a Railway build log.
+export DOCKER_BUILDKIT=1
+export BUILDKIT_PROGRESS=plain
 echo "==> sprite-builder build {build_id}"
 echo "==> commit {sha}"
 
@@ -307,9 +357,12 @@ echo "{marker}"
 // helpers
 // ---------------------------------------------------------------------------
 
-/// Run a command and require an HTTP-success response.
+/// Run a command and require an HTTP-success response. Bounded by EXEC_TIMEOUT
+/// so a hung setup exec fails the build fast instead of riding the 900s HTTP cap.
 async fn exec_ok(app: &AppState, sprite: &str, cmd: &str) -> anyhow::Result<()> {
-    let res = app.sprites.exec(sprite, cmd).await?;
+    let res = tokio::time::timeout(EXEC_TIMEOUT, app.sprites.exec(sprite, cmd))
+        .await
+        .map_err(|_| anyhow::anyhow!("exec timed out after {}s", EXEC_TIMEOUT.as_secs()))??;
     if res.ok() {
         Ok(())
     } else {
