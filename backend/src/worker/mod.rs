@@ -395,24 +395,34 @@ export BUILDKIT_PROGRESS=plain
 echo "==> sprite-builder build {build_id}"
 echo "==> commit {sha}"
 
+# The sprite exec session runs as an unprivileged user (uid 1001 `sprite`), not
+# root — even though $HOME/`/root` happen to be writable. `dockerd` does a hard
+# geteuid()==0 check and refuses to start otherwise ("dockerd needs to be
+# started with root privileges"), so the daemon and the installer must go
+# through `sudo` (passwordless on the sprite). Once the daemon is up we relax the
+# socket perms so the rest of this script's `docker` client calls work as the
+# sprite user without sudo.
 if ! command -v docker >/dev/null 2>&1; then
   echo "==> installing docker"
-  curl -fsSL https://get.docker.com | sh
+  curl -fsSL https://get.docker.com | sudo sh
 fi
 if ! docker info >/dev/null 2>&1; then
   echo "==> starting dockerd"
-  ( dockerd >/tmp/dockerd.log 2>&1 & ) || true
-  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  ( sudo dockerd >/tmp/dockerd.log 2>&1 & ) || true
+  for i in $(seq 1 30); do sudo docker info >/dev/null 2>&1 && break; sleep 1; done
   # If the daemon never came up, surface *why* (its startup log) and fail here
   # with a clear cause, instead of letting `docker build` hit the opaque
   # "cannot connect to /var/run/docker.sock" a few lines down.
-  if ! docker info >/dev/null 2>&1; then
+  if ! sudo docker info >/dev/null 2>&1; then
     echo "==> ERROR: dockerd did not become ready within 30s. /tmp/dockerd.log follows:"
     echo "-------------------- dockerd.log --------------------"
     cat /tmp/dockerd.log 2>/dev/null || echo "(no /tmp/dockerd.log was written — dockerd may have failed to exec)"
     echo "-----------------------------------------------------"
     exit 1
   fi
+  # dockerd creates the socket root-owned; make it usable by the sprite user so
+  # the plain `docker` calls below don't each need sudo.
+  sudo chmod 666 /var/run/docker.sock || true
 fi
 
 export SB_GH_TOKEN='{token}'
