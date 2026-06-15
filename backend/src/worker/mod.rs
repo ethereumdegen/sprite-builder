@@ -162,16 +162,13 @@ async fn run_build(app: &AppState, build: Build) -> anyhow::Result<()> {
     .await?;
 
     let sprite_name = generate_sprite_name(&app.db, build.id).await?;
-    // Surface the public URL immediately. It's derived purely from the sprite
-    // name, so it's known the moment we pick the name — no need to wait for the
-    // build to finish. It won't actually serve until the container is up and the
-    // URL is made public at the end; the separate "Reachable" indicator tracks
-    // that. finish() rewrites url to its final value (kept on success, cleared on
-    // build failure).
-    let url = app.sprites.public_url(&sprite_name);
-    sqlx::query("UPDATE builds SET sprite_name = $1, url = $2, updated_at = now() WHERE id = $3")
+    // Persist the sprite name now (used for runtime logs + blue-green cleanup).
+    // The public URL hostname is assigned by the Sprites API at provisioning
+    // time, so it isn't known until the sprite is created inside run_on_sprite —
+    // which persists it then. finish() writes the final url (kept on success,
+    // cleared on build failure).
+    sqlx::query("UPDATE builds SET sprite_name = $1, updated_at = now() WHERE id = $2")
         .bind(&sprite_name)
-        .bind(&url)
         .bind(build.id)
         .execute(&app.db)
         .await?;
@@ -188,10 +185,10 @@ async fn run_build(app: &AppState, build: Build) -> anyhow::Result<()> {
     };
 
     match run_on_sprite(app, &sprite_name, &project, &owner, &build).await {
-        Ok(logs) => {
-            // Built OK. Promote it: make the URL public and confirm it serves (#3).
-            // `url` was already computed and persisted up front (it's derived from
-            // the sprite name); reuse it here.
+        Ok((logs, url)) => {
+            // Built OK. The sprite was created public, so its `url` (assigned by
+            // the API and returned from run_on_sprite) is already reachable; the
+            // belt-and-suspenders call below re-asserts it. Then confirm it serves.
             let _ = app.sprites.set_url_public(&sprite_name).await;
 
             if probe_until_ready(&app.http, &url).await {
@@ -231,21 +228,28 @@ async fn run_on_sprite(
     project: &Project,
     owner: &User,
     build: &Build,
-) -> Result<String, (String, String)> {
+) -> Result<(String, String), (String, String)> {
     let token = owner.github_token.clone();
     let mut head = format!("==> creating sprite {sprite} (provisioning VM)\n");
     let _ = update_logs(&app.db, build.id, &head).await;
 
-    // Bound provisioning so a wedged Sprites API surfaces in ~2 min, not 15.
-    match tokio::time::timeout(CREATE_TIMEOUT, app.sprites.create_sprite(sprite)).await {
-        Ok(Ok(())) => {}
+    // Bound provisioning so a wedged Sprites API surfaces in ~2 min, not 15. The
+    // API assigns the public hostname (e.g. <name>-<id>.sprites.app) and returns
+    // it here; persist it now so the correct URL shows during the build.
+    let url = match tokio::time::timeout(CREATE_TIMEOUT, app.sprites.create_sprite(sprite)).await {
+        Ok(Ok(api_url)) => api_url.unwrap_or_else(|| app.sprites.public_url(sprite)),
         Ok(Err(e)) => return Err((head, format!("create sprite failed: {e}"))),
         Err(_) => {
             let msg = format!("sprite did not provision within {}s", CREATE_TIMEOUT.as_secs());
             head.push_str(&format!("==> {msg}\n"));
             return Err((head, msg));
         }
-    }
+    };
+    let _ = sqlx::query("UPDATE builds SET url = $1, updated_at = now() WHERE id = $2")
+        .bind(&url)
+        .bind(build.id)
+        .execute(&app.db)
+        .await;
     // Persist each phase as it happens, so the log panel reflects progress
     // instead of freezing on "creating sprite" until the first poll lands.
     head.push_str("==> sprite created; uploading build script\n");
@@ -373,7 +377,7 @@ echo $? >/var/log/sb-build.done"#;
 
         if let Some(code) = exit {
             if code == 0 && body.contains(SUCCESS_MARKER) {
-                return Ok(logs);
+                return Ok((logs, url));
             }
             return Err((logs, format!("build script exited with code {code}")));
         }

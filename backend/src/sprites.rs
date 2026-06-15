@@ -72,13 +72,21 @@ impl SpritesClient {
         format!("Bearer {}", self.config.sprites_token)
     }
 
-    /// Create a new sprite. POST /v1/sprites { "name": ... }
-    pub async fn create_sprite(&self, name: &str) -> anyhow::Result<()> {
+    /// Create a new sprite, public from the start so its preview URL is reachable
+    /// without org auth (the whole point of a build preview). Returns the API-
+    /// assigned public URL (e.g. `https://<name>-<id>.sprites.app`) — we use that
+    /// rather than constructing one, since the hostname is assigned server-side.
+    ///
+    /// POST /v1/sprites { "name": ..., "url_settings": { "auth": "public" } }
+    pub async fn create_sprite(&self, name: &str) -> anyhow::Result<Option<String>> {
         let resp = self
             .http
             .post(self.url("/sprites"))
             .header("Authorization", self.bearer())
-            .json(&serde_json::json!({ "name": name }))
+            .json(&serde_json::json!({
+                "name": name,
+                "url_settings": { "auth": "public" },
+            }))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -86,7 +94,11 @@ impl SpritesClient {
             let body = resp.text().await.unwrap_or_default();
             return Err(anyhow!("create sprite failed ({status}): {body}"));
         }
-        Ok(())
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        Ok(body
+            .get("url")
+            .and_then(|v| v.as_str())
+            .map(str::to_string))
     }
 
     /// List every sprite in the org. GET /v1/sprites.
@@ -200,14 +212,16 @@ impl SpritesClient {
     }
 
     /// Make the sprite's public URL reachable without sprite-org auth.
-    /// Mirrors `sprite url update --auth public`.
+    /// Mirrors `sprite url update --auth public`: PUT /v1/sprites/{name} with the
+    /// nested url_settings. (Sprites created via `create_sprite` are already
+    /// public; this stays as a belt-and-suspenders call and backs the admin
+    /// "make public" action.)
     pub async fn set_url_public(&self, sprite: &str) -> anyhow::Result<()> {
-        // The url settings live under the services/url resource; we PATCH auth=public.
         let resp = self
             .http
-            .patch(self.url(&format!("/sprites/{sprite}/url")))
+            .put(self.url(&format!("/sprites/{sprite}")))
             .header("Authorization", self.bearer())
-            .json(&serde_json::json!({ "auth": "public" }))
+            .json(&serde_json::json!({ "url_settings": { "auth": "public" } }))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -219,9 +233,10 @@ impl SpritesClient {
         Ok(())
     }
 
-    /// The public URL of a sprite. Traffic is proxied to port 8080 inside the VM.
-    /// Pattern: https://<sprite-name>-<org>.sprites.dev/
+    /// Fallback public URL when the API didn't return one. The live service
+    /// assigns `https://<name>-<id>.sprites.app` (the `<id>` is server-side, not
+    /// the org slug), so prefer the API's `url` field — this is only a last resort.
     pub fn public_url(&self, sprite: &str) -> String {
-        format!("https://{}-{}.sprites.dev/", sprite, self.config.sprites_org)
+        format!("https://{}-{}.sprites.app/", sprite, self.config.sprites_org)
     }
 }
