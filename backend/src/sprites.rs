@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::config::Config;
 
@@ -79,6 +80,47 @@ impl SpritesClient {
         let status = resp.status();
         let output = resp.text().await.unwrap_or_default();
         Ok(ExecResult { status, output })
+    }
+
+    /// Start a long-running command and intentionally disconnect, leaving it
+    /// running on the sprite for `keepalive` after the disconnect.
+    ///
+    /// Non-TTY execs are killed `10s` after the client disconnects by default
+    /// (`max_run_after_disconnect`), which is far too short for a build — so a
+    /// plain backgrounded launch dies before it produces output. Here we run the
+    /// command in the foreground with a long `max_run_after_disconnect`, then drop
+    /// the connection after a short wait; a client-side timeout *is* the
+    /// disconnect, and the command keeps running so we can poll its log file from
+    /// separate short execs.
+    pub async fn exec_detached(
+        &self,
+        sprite: &str,
+        script: &str,
+        keepalive: Duration,
+    ) -> anyhow::Result<()> {
+        let keep = format!("{}s", keepalive.as_secs());
+        let query = [
+            ("cmd", "bash"),
+            ("cmd", "-lc"),
+            ("cmd", script),
+            ("max_run_after_disconnect", keep.as_str()),
+        ];
+        let res = self
+            .http
+            .post(self.url(&format!("/sprites/{sprite}/exec")))
+            .query(&query)
+            .header("Authorization", self.bearer())
+            // Give the session time to register, then disconnect on purpose.
+            .timeout(Duration::from_secs(8))
+            .send()
+            .await;
+        match res {
+            // Either the command somehow returned fast, or (expected) our short
+            // timeout fired — both leave the build running under the keepalive.
+            Ok(_) => Ok(()),
+            Err(e) if e.is_timeout() => Ok(()),
+            Err(e) => Err(anyhow!("exec_detached request failed: {e}")),
+        }
     }
 
     /// Delete a sprite. DELETE /v1/sprites/{name}. Best-effort cleanup.

@@ -251,14 +251,16 @@ async fn run_on_sprite(
         return Err((head, format!("upload script failed: {e}")));
     }
 
-    // Launch detached so we can poll the log without holding a long HTTP request.
-    // Record the wrapper PID so each poll can probe liveness with `kill -0`
-    // (robust, unlike pattern-matching, which would also match the poll shell).
-    let launch = r#"rm -f /var/log/sb-build.log /var/log/sb-build.done /var/log/sb-build.pid
-setsid bash -c 'bash /root/sb-build.sh >/var/log/sb-build.log 2>&1; echo $? >/var/log/sb-build.done' </dev/null >/dev/null 2>&1 &
-echo $! >/var/log/sb-build.pid
-echo launched"#;
-    if let Err(e) = exec_ok(app, sprite, launch).await {
+    // Run the build as the foreground command of a keepalive session, then drop
+    // the connection. Sprites kills non-TTY execs 10s after disconnect by
+    // default, so we pass a long max_run_after_disconnect (= BUILD_TIMEOUT) and
+    // poll its log file from separate short execs. Record the shell PID so each
+    // poll can probe liveness with `kill -0`.
+    let run = r#"rm -f /var/log/sb-build.log /var/log/sb-build.done /var/log/sb-build.pid
+echo $$ >/var/log/sb-build.pid
+bash /root/sb-build.sh >/var/log/sb-build.log 2>&1
+echo $? >/var/log/sb-build.done"#;
+    if let Err(e) = app.sprites.exec_detached(sprite, run, BUILD_TIMEOUT).await {
         head.push_str("==> failed to launch build\n");
         return Err((head, format!("launch failed: {e}")));
     }
