@@ -30,13 +30,12 @@ pub async fn list_projects(
     State(app): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> AppResult<Json<Vec<Project>>> {
-    let projects = sqlx::query_as!(
-        Project,
+    let projects = sqlx::query_as::<_, Project>(
         r#"SELECT id, user_id, name, repo_full_name, repo_id, default_branch,
                   dockerfile_path, container_port, created_at
            FROM projects WHERE user_id = $1 ORDER BY created_at DESC"#,
-        user.id,
     )
+    .bind(user.id)
     .fetch_all(&app.db)
     .await?;
     Ok(Json(projects))
@@ -60,34 +59,37 @@ pub async fn create_project(
     if body.name.trim().is_empty() || body.repo_full_name.trim().is_empty() {
         return Err(AppError::bad_request("name and repo_full_name are required"));
     }
-    let project = sqlx::query_as!(
-        Project,
+    let name = body.name.trim().to_string();
+    let repo_full_name = body.repo_full_name.trim().to_string();
+    let default_branch = body.default_branch.unwrap_or_else(|| "main".to_string());
+    let dockerfile_path = body.dockerfile_path.unwrap_or_else(|| "Dockerfile".to_string());
+    let container_port = body.container_port.unwrap_or(8080);
+    let project = sqlx::query_as::<_, Project>(
         r#"INSERT INTO projects
              (user_id, name, repo_full_name, repo_id, default_branch, dockerfile_path, container_port)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING id, user_id, name, repo_full_name, repo_id, default_branch,
                      dockerfile_path, container_port, created_at"#,
-        user.id,
-        body.name.trim(),
-        body.repo_full_name.trim(),
-        body.repo_id,
-        body.default_branch.unwrap_or_else(|| "main".to_string()),
-        body.dockerfile_path.unwrap_or_else(|| "Dockerfile".to_string()),
-        body.container_port.unwrap_or(8080),
     )
+    .bind(user.id)
+    .bind(name)
+    .bind(repo_full_name)
+    .bind(body.repo_id)
+    .bind(default_branch)
+    .bind(dockerfile_path)
+    .bind(container_port)
     .fetch_one(&app.db)
     .await?;
     Ok(Json(project))
 }
 
 async fn load_owned_project(app: &AppState, user_id: Uuid, id: Uuid) -> AppResult<Project> {
-    let project = sqlx::query_as!(
-        Project,
+    let project = sqlx::query_as::<_, Project>(
         r#"SELECT id, user_id, name, repo_full_name, repo_id, default_branch,
                   dockerfile_path, container_port, created_at
            FROM projects WHERE id = $1"#,
-        id,
     )
+    .bind(id)
     .fetch_optional(&app.db)
     .await?
     .ok_or(AppError::NotFound)?;
@@ -115,13 +117,12 @@ pub async fn list_builds(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Vec<Build>>> {
     load_owned_project(&app, user.id, id).await?;
-    let builds = sqlx::query_as!(
-        Build,
+    let builds = sqlx::query_as::<_, Build>(
         r#"SELECT id, project_id, commit_sha, status, sprite_name, url, logs, error,
                   metadata, created_at, updated_at, started_at, finished_at
            FROM builds WHERE project_id = $1 ORDER BY created_at DESC"#,
-        id,
     )
+    .bind(id)
     .fetch_all(&app.db)
     .await?;
     Ok(Json(builds))
@@ -156,15 +157,14 @@ pub async fn create_build(
         .map_err(|e| AppError::bad_request(format!("could not resolve HEAD commit: {e}")))?,
     };
 
-    let build = sqlx::query_as!(
-        Build,
+    let build = sqlx::query_as::<_, Build>(
         r#"INSERT INTO builds (project_id, commit_sha, status)
            VALUES ($1, $2, 'queued')
            RETURNING id, project_id, commit_sha, status, sprite_name, url, logs, error,
                      metadata, created_at, updated_at, started_at, finished_at"#,
-        project.id,
-        commit_sha,
     )
+    .bind(project.id)
+    .bind(commit_sha)
     .fetch_one(&app.db)
     .await?;
 
@@ -176,13 +176,12 @@ pub async fn get_build(
     AuthUser(user): AuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Build>> {
-    let build = sqlx::query_as!(
-        Build,
+    let build = sqlx::query_as::<_, Build>(
         r#"SELECT id, project_id, commit_sha, status, sprite_name, url, logs, error,
                   metadata, created_at, updated_at, started_at, finished_at
            FROM builds WHERE id = $1"#,
-        id,
     )
+    .bind(id)
     .fetch_optional(&app.db)
     .await?
     .ok_or(AppError::NotFound)?;

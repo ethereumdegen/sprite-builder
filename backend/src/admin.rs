@@ -17,7 +17,7 @@ use crate::AppState;
 // stats
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 pub struct AdminStats {
     pub users: i64,
     pub projects: i64,
@@ -30,36 +30,28 @@ pub struct AdminStats {
 
 /// App-wide counts for the dashboard header.
 pub async fn stats(State(app): State<AppState>, _admin: AdminUser) -> AppResult<Json<AdminStats>> {
-    let row = sqlx::query!(
+    let stats = sqlx::query_as::<_, AdminStats>(
         r#"SELECT
-            (SELECT count(*) FROM users)                              AS "users!",
-            (SELECT count(*) FROM projects)                          AS "projects!",
-            (SELECT count(*) FROM builds)                            AS "builds_total!",
-            (SELECT count(*) FROM builds WHERE status = 'queued')    AS "builds_queued!",
-            (SELECT count(*) FROM builds WHERE status = 'running')   AS "builds_running!",
-            (SELECT count(*) FROM builds WHERE status = 'succeeded') AS "builds_succeeded!",
-            (SELECT count(*) FROM builds WHERE status = 'failed')    AS "builds_failed!"
+            (SELECT count(*) FROM users)                              AS users,
+            (SELECT count(*) FROM projects)                          AS projects,
+            (SELECT count(*) FROM builds)                            AS builds_total,
+            (SELECT count(*) FROM builds WHERE status = 'queued')    AS builds_queued,
+            (SELECT count(*) FROM builds WHERE status = 'running')   AS builds_running,
+            (SELECT count(*) FROM builds WHERE status = 'succeeded') AS builds_succeeded,
+            (SELECT count(*) FROM builds WHERE status = 'failed')    AS builds_failed
         "#,
     )
     .fetch_one(&app.db)
     .await?;
 
-    Ok(Json(AdminStats {
-        users: row.users,
-        projects: row.projects,
-        builds_total: row.builds_total,
-        builds_queued: row.builds_queued,
-        builds_running: row.builds_running,
-        builds_succeeded: row.builds_succeeded,
-        builds_failed: row.builds_failed,
-    }))
+    Ok(Json(stats))
 }
 
 // ---------------------------------------------------------------------------
 // builds (cross-tenant)
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 pub struct AdminBuild {
     pub id: Uuid,
     pub status: String,
@@ -93,31 +85,30 @@ pub async fn builds(
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
     let status = q.status.filter(|s| !s.trim().is_empty());
 
-    let rows = sqlx::query_as!(
-        AdminBuild,
+    let rows = sqlx::query_as::<_, AdminBuild>(
         r#"SELECT
-              b.id            AS "id!",
-              b.status        AS "status!",
-              b.commit_sha    AS "commit_sha!",
-              b.sprite_name   AS "sprite_name?",
-              b.url           AS "url?",
-              b.error         AS "error?",
-              b.created_at    AS "created_at!",
-              b.started_at    AS "started_at?",
-              b.finished_at   AS "finished_at?",
-              b.project_id    AS "project_id!",
-              p.name          AS "project_name!",
-              p.repo_full_name AS "repo_full_name!",
-              u.github_login  AS "owner_login!"
+              b.id            AS id,
+              b.status        AS status,
+              b.commit_sha    AS commit_sha,
+              b.sprite_name   AS sprite_name,
+              b.url           AS url,
+              b.error         AS error,
+              b.created_at    AS created_at,
+              b.started_at    AS started_at,
+              b.finished_at   AS finished_at,
+              b.project_id    AS project_id,
+              p.name          AS project_name,
+              p.repo_full_name AS repo_full_name,
+              u.github_login  AS owner_login
            FROM builds b
            JOIN projects p ON p.id = b.project_id
            JOIN users u    ON u.id = p.user_id
            WHERE ($1::text IS NULL OR b.status = $1)
            ORDER BY b.created_at DESC
            LIMIT $2"#,
-        status,
-        limit,
     )
+    .bind(status)
+    .bind(limit)
     .fetch_all(&app.db)
     .await?;
 
@@ -128,7 +119,7 @@ pub async fn builds(
 // users + role management
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 pub struct AdminUserRow {
     pub id: Uuid,
     pub github_login: String,
@@ -144,18 +135,17 @@ pub async fn users(
     State(app): State<AppState>,
     _admin: AdminUser,
 ) -> AppResult<Json<Vec<AdminUserRow>>> {
-    let rows = sqlx::query_as!(
-        AdminUserRow,
+    let rows = sqlx::query_as::<_, AdminUserRow>(
         r#"SELECT
-              u.id           AS "id!",
-              u.github_login AS "github_login!",
-              u.name         AS "name?",
-              u.role         AS "role!",
-              u.created_at   AS "created_at!",
-              (SELECT count(*) FROM projects p WHERE p.user_id = u.id) AS "projects!",
+              u.id           AS id,
+              u.github_login AS github_login,
+              u.name         AS name,
+              u.role         AS role,
+              u.created_at   AS created_at,
+              (SELECT count(*) FROM projects p WHERE p.user_id = u.id) AS projects,
               (SELECT count(*) FROM builds b
                  JOIN projects p ON p.id = b.project_id
-                 WHERE p.user_id = u.id)                               AS "builds!"
+                 WHERE p.user_id = u.id)                               AS builds
            FROM users u
            ORDER BY u.created_at"#,
     )
@@ -185,33 +175,30 @@ pub async fn set_role(
         return Err(AppError::bad_request("you cannot change your own role"));
     }
 
-    let res = sqlx::query!(
-        "UPDATE users SET role = $1, updated_at = now() WHERE id = $2",
-        role,
-        id,
-    )
-    .execute(&app.db)
-    .await?;
+    let res = sqlx::query("UPDATE users SET role = $1, updated_at = now() WHERE id = $2")
+        .bind(role)
+        .bind(id)
+        .execute(&app.db)
+        .await?;
     if res.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
 
-    let row = sqlx::query_as!(
-        AdminUserRow,
+    let row = sqlx::query_as::<_, AdminUserRow>(
         r#"SELECT
-              u.id           AS "id!",
-              u.github_login AS "github_login!",
-              u.name         AS "name?",
-              u.role         AS "role!",
-              u.created_at   AS "created_at!",
-              (SELECT count(*) FROM projects p WHERE p.user_id = u.id) AS "projects!",
+              u.id           AS id,
+              u.github_login AS github_login,
+              u.name         AS name,
+              u.role         AS role,
+              u.created_at   AS created_at,
+              (SELECT count(*) FROM projects p WHERE p.user_id = u.id) AS projects,
               (SELECT count(*) FROM builds b
                  JOIN projects p ON p.id = b.project_id
-                 WHERE p.user_id = u.id)                               AS "builds!"
+                 WHERE p.user_id = u.id)                               AS builds
            FROM users u
            WHERE u.id = $1"#,
-        id,
     )
+    .bind(id)
     .fetch_one(&app.db)
     .await?;
     Ok(Json(row))

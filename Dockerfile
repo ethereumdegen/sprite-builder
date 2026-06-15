@@ -11,9 +11,6 @@ RUN npm run build
 # 2. Build the Rust server
 FROM rust:1-slim AS backend
 WORKDIR /app/backend
-# Compile the sqlx query! macros against the committed offline cache (.sqlx),
-# since there's no database at image-build time (ADR 0002).
-ENV SQLX_OFFLINE=true
 RUN apt-get update && apt-get install -y pkg-config build-essential && rm -rf /var/lib/apt/lists/*
 COPY backend/ ./
 RUN cargo build --release --bin sprite-builder

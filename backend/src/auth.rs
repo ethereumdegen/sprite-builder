@@ -64,23 +64,22 @@ async fn resolve_user(parts: &Parts, app: &AppState) -> AppResult<User> {
             let token = token.trim();
             if !token.is_empty() {
                 let hash = sha256_hex(token);
-                let user = sqlx::query_as!(
-                    User,
+                let user = sqlx::query_as::<_, User>(
                     r#"SELECT u.id, u.github_id, u.github_login, u.name, u.avatar_url,
                               u.github_token, u.created_at, u.updated_at, u.role
                        FROM users u
                        JOIN api_keys k ON k.user_id = u.id
                        WHERE k.key_hash = $1"#,
-                    hash,
                 )
+                .bind(&hash)
                 .fetch_optional(&app.db)
                 .await?;
                 return match user {
                     Some(u) => {
-                        let _ = sqlx::query!(
+                        let _ = sqlx::query(
                             "UPDATE api_keys SET last_used_at = now() WHERE key_hash = $1",
-                            hash,
                         )
+                        .bind(&hash)
                         .execute(&app.db)
                         .await;
                         Ok(u)
@@ -94,15 +93,14 @@ async fn resolve_user(parts: &Parts, app: &AppState) -> AppResult<User> {
     // 2) Session cookie.
     let jar = CookieJar::from_headers(&parts.headers);
     if let Some(cookie) = jar.get(SESSION_COOKIE) {
-        let user = sqlx::query_as!(
-            User,
+        let user = sqlx::query_as::<_, User>(
             r#"SELECT u.id, u.github_id, u.github_login, u.name, u.avatar_url,
                       u.github_token, u.created_at, u.updated_at, u.role
                FROM users u
                JOIN sessions s ON s.user_id = u.id
                WHERE s.token = $1 AND s.expires_at > now()"#,
-            cookie.value(),
         )
+        .bind(cookie.value())
         .fetch_optional(&app.db)
         .await?;
         if let Some(u) = user {
@@ -216,8 +214,7 @@ pub async fn github_callback(
     let seed_admin = app.config.is_seed_admin(&gh_user.login);
 
     // Upsert the user, refreshing the stored token.
-    let user = sqlx::query_as!(
-        User,
+    let user = sqlx::query_as::<_, User>(
         r#"INSERT INTO users (github_id, github_login, name, avatar_url, github_token, role)
            VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN 'admin' ELSE 'user' END)
            ON CONFLICT (github_id) DO UPDATE
@@ -229,27 +226,25 @@ pub async fn github_callback(
                  updated_at = now()
            RETURNING id, github_id, github_login, name, avatar_url,
                      github_token, created_at, updated_at, role"#,
-        gh_user.id,
-        gh_user.login,
-        gh_user.name,
-        gh_user.avatar_url,
-        token,
-        seed_admin,
     )
+    .bind(gh_user.id)
+    .bind(gh_user.login)
+    .bind(gh_user.name)
+    .bind(gh_user.avatar_url)
+    .bind(token)
+    .bind(seed_admin)
     .fetch_one(&app.db)
     .await?;
 
     // Create a session.
     let session_token = random_token(32);
     let expires = Utc::now() + Duration::days(SESSION_TTL_DAYS);
-    sqlx::query!(
-        "INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)",
-        session_token,
-        user.id,
-        expires,
-    )
-    .execute(&app.db)
-    .await?;
+    sqlx::query("INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)")
+        .bind(&session_token)
+        .bind(user.id)
+        .bind(expires)
+        .execute(&app.db)
+        .await?;
 
     let secure = app.config.backend_url.starts_with("https");
     let jar = jar
@@ -264,7 +259,8 @@ pub async fn logout(
     jar: CookieJar,
 ) -> AppResult<(CookieJar, Json<serde_json::Value>)> {
     if let Some(cookie) = jar.get(SESSION_COOKIE) {
-        sqlx::query!("DELETE FROM sessions WHERE token = $1", cookie.value())
+        sqlx::query("DELETE FROM sessions WHERE token = $1")
+            .bind(cookie.value())
             .execute(&app.db)
             .await?;
     }
@@ -286,12 +282,11 @@ pub async fn list_keys(
     State(app): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> AppResult<Json<Vec<ApiKey>>> {
-    let keys = sqlx::query_as!(
-        ApiKey,
+    let keys = sqlx::query_as::<_, ApiKey>(
         r#"SELECT id, user_id, name, key_hash, key_prefix, last_used_at, created_at
            FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC"#,
-        user.id,
     )
+    .bind(user.id)
     .fetch_all(&app.db)
     .await?;
     Ok(Json(keys))
@@ -315,16 +310,15 @@ pub async fn create_key(
     let prefix = secret.chars().take(11).collect::<String>();
     let hash = sha256_hex(&secret);
 
-    let key = sqlx::query_as!(
-        ApiKey,
+    let key = sqlx::query_as::<_, ApiKey>(
         r#"INSERT INTO api_keys (user_id, name, key_hash, key_prefix)
            VALUES ($1, $2, $3, $4)
            RETURNING id, user_id, name, key_hash, key_prefix, last_used_at, created_at"#,
-        user.id,
-        body.name.trim(),
-        hash,
-        prefix,
     )
+    .bind(user.id)
+    .bind(body.name.trim())
+    .bind(hash)
+    .bind(prefix)
     .fetch_one(&app.db)
     .await?;
 
@@ -339,13 +333,11 @@ pub async fn delete_key(
     AuthUser(user): AuthUser,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
-    let res = sqlx::query!(
-        "DELETE FROM api_keys WHERE id = $1 AND user_id = $2",
-        id,
-        user.id,
-    )
-    .execute(&app.db)
-    .await?;
+    let res = sqlx::query("DELETE FROM api_keys WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(user.id)
+        .execute(&app.db)
+        .await?;
     if res.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
