@@ -101,7 +101,9 @@ export default function AdminPage() {
               {builds.map((b) => (
                 <tr key={b.id}>
                   <td>
-                    <span className={"badge " + b.status}>{b.status}</span>
+                    <Link to={`/builds/${b.id}`} className={"badge " + b.status}>
+                      {b.status}
+                    </Link>
                   </td>
                   <td className="mono">{b.owner_login}</td>
                   <td>

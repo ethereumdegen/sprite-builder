@@ -5,6 +5,7 @@ import { useAuth } from "./stores/auth";
 import Login from "./pages/Login";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
+import BuildPage from "./pages/BuildPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
 import DocsPage from "./pages/DocsPage";
 import AdminPage from "./pages/AdminPage";
@@ -31,6 +32,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<ProjectsPage />} />
           <Route path="/projects/:id" element={<ProjectPage />} />
+          <Route path="/builds/:id" element={<BuildPage />} />
           <Route path="/keys" element={<ApiKeysPage />} />
           <Route path="/docs" element={<DocsPage />} />
           <Route path="/admin" element={<AdminRoute />} />

@@ -17,6 +17,16 @@ const SUCCESS_MARKER: &str = "__SB_BUILD_OK__";
 /// by the build's exit code.
 const DONE_MARKER: &str = "__SB_DONE__:";
 
+/// Marker the poll command appends every tick with a liveness probe — the count
+/// of running build-script processes. Lets us tell "running, no output yet" from
+/// "the detached build died" without polluting the user-visible log.
+const STAT_MARKER: &str = "__SB_STAT__:";
+
+/// Consecutive polls showing the build process gone (with no recorded exit code)
+/// before we declare it dead. A couple ticks of tolerance avoids a false alarm in
+/// the brief window between the script exiting and the done-file being written.
+const MAX_DEAD_POLLS: u32 = 3;
+
 /// How long to wait for the deployed app to start serving on its sprite URL.
 const READINESS_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -242,8 +252,11 @@ async fn run_on_sprite(
     }
 
     // Launch detached so we can poll the log without holding a long HTTP request.
-    let launch = r#"rm -f /var/log/sb-build.log /var/log/sb-build.done
+    // Record the wrapper PID so each poll can probe liveness with `kill -0`
+    // (robust, unlike pattern-matching, which would also match the poll shell).
+    let launch = r#"rm -f /var/log/sb-build.log /var/log/sb-build.done /var/log/sb-build.pid
 setsid bash -c 'bash /root/sb-build.sh >/var/log/sb-build.log 2>&1; echo $? >/var/log/sb-build.done' </dev/null >/dev/null 2>&1 &
+echo $! >/var/log/sb-build.pid
 echo launched"#;
     if let Err(e) = exec_ok(app, sprite, launch).await {
         head.push_str("==> failed to launch build\n");
@@ -253,12 +266,17 @@ echo launched"#;
     let _ = update_logs(&app.db, build.id, &head).await;
 
     // Poll the log file until the build records an exit code (or we time out).
+    // Each tick also reports a liveness count (running sb-build.sh processes) so
+    // an empty log can be diagnosed as "starting up" vs "the build died".
     let poll_cmd = format!(
         "cat /var/log/sb-build.log 2>/dev/null || true\n\
+         printf '\\n{STAT_MARKER}%s' \"$(kill -0 \"$(cat /var/log/sb-build.pid 2>/dev/null)\" 2>/dev/null && echo 1 || echo 0)\"\n\
          if [ -f /var/log/sb-build.done ]; then printf '\\n{DONE_MARKER}'; cat /var/log/sb-build.done; fi"
     );
-    let deadline = Instant::now() + BUILD_TIMEOUT;
+    let started = Instant::now();
+    let deadline = started + BUILD_TIMEOUT;
     let mut poll_errors = 0u32;
+    let mut dead_polls = 0u32;
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
 
@@ -285,8 +303,24 @@ echo launched"#;
                 continue;
             }
         };
-        let (body, exit) = parse_poll(&raw);
-        let logs = format!("{head}{}", redact(&body, &token));
+        let (body, alive, exit) = parse_poll(&raw);
+        let body = redact(&body, &token);
+
+        // Show real output as it streams; when there's none yet, show a heartbeat
+        // (elapsed + process state) instead of a frozen blank panel.
+        let logs = if body.trim().is_empty() && exit.is_none() {
+            let state = match alive {
+                Some(true) => "build process running",
+                Some(false) => "build process not running",
+                None => "build process state unknown",
+            };
+            format!(
+                "{head}==> waiting for build output… ({}s elapsed; {state})\n",
+                started.elapsed().as_secs()
+            )
+        } else {
+            format!("{head}{body}\n")
+        };
         let _ = update_logs(&app.db, build.id, &logs).await;
 
         if let Some(code) = exit {
@@ -295,6 +329,24 @@ echo launched"#;
             }
             return Err((logs, format!("build script exited with code {code}")));
         }
+
+        // The detached build vanished without recording an exit code — almost
+        // always means the sprite didn't keep the background process alive past
+        // the launch exec. Fail fast with a clear cause instead of timing out.
+        if alive == Some(false) {
+            dead_polls += 1;
+            if dead_polls >= MAX_DEAD_POLLS {
+                let logs = format!(
+                    "{logs}==> build process exited without recording a result \
+                     (the sprite may not keep background processes alive across exec calls)\n"
+                );
+                let _ = update_logs(&app.db, build.id, &logs).await;
+                return Err((logs, "build process died without recording an exit code".into()));
+            }
+        } else {
+            dead_polls = 0;
+        }
+
         if Instant::now() >= deadline {
             let logs = format!("{logs}\n==> timed out after {}s", BUILD_TIMEOUT.as_secs());
             return Err((logs, "build timed out".into()));
@@ -370,20 +422,39 @@ async fn exec_ok(app: &AppState, sprite: &str, cmd: &str) -> anyhow::Result<()> 
     }
 }
 
-/// Split poll output into (log body, optional exit code).
-fn parse_poll(output: &str) -> (String, Option<i32>) {
-    if let Some(idx) = output.rfind(DONE_MARKER) {
-        let code = output[idx + DONE_MARKER.len()..]
+/// Split poll output into (log body, build-process-alive flag, exit code).
+/// The poll appends `STAT_MARKER<n>` (process count) every tick and, once done,
+/// `DONE_MARKER<code>`. Both are stripped from the returned body. `alive` is
+/// `None` if the probe was missing/unparseable.
+fn parse_poll(output: &str) -> (String, Option<bool>, Option<i32>) {
+    let mut rest = output;
+
+    let mut exit = None;
+    if let Some(idx) = rest.rfind(DONE_MARKER) {
+        exit = rest[idx + DONE_MARKER.len()..]
             .lines()
             .next()
             .unwrap_or("")
             .trim()
             .parse::<i32>()
             .ok();
-        (output[..idx].trim_end().to_string(), code)
-    } else {
-        (output.to_string(), None)
+        rest = &rest[..idx];
     }
+
+    let mut alive = None;
+    if let Some(idx) = rest.rfind(STAT_MARKER) {
+        alive = rest[idx + STAT_MARKER.len()..]
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .parse::<i32>()
+            .ok()
+            .map(|n| n > 0);
+        rest = &rest[..idx];
+    }
+
+    (rest.trim_end().to_string(), alive, exit)
 }
 
 /// Defense-in-depth: scrub the GitHub token from anything we persist.
