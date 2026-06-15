@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context};
+use serde::Serialize;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,6 +25,37 @@ pub struct ExecResult {
 impl ExecResult {
     pub fn ok(&self) -> bool {
         self.status.is_success()
+    }
+}
+
+/// A sprite as reported by the Sprites.dev list endpoint. Only the fields we
+/// surface in the admin dashboard; parsed defensively (see [`SpriteSummary::from_value`])
+/// because the live API uses a few different names for these across versions.
+#[derive(Debug, Clone, Serialize)]
+pub struct SpriteSummary {
+    pub name: String,
+    pub status: Option<String>,
+    pub created_at: Option<String>,
+}
+
+impl SpriteSummary {
+    fn from_value(v: &serde_json::Value) -> Option<Self> {
+        let name = v.get("name").and_then(|x| x.as_str())?.to_string();
+        let status = v
+            .get("status")
+            .or_else(|| v.get("state"))
+            .and_then(|x| x.as_str())
+            .map(str::to_string);
+        let created_at = v
+            .get("created_at")
+            .or_else(|| v.get("created"))
+            .and_then(|x| x.as_str())
+            .map(str::to_string);
+        Some(Self {
+            name,
+            status,
+            created_at,
+        })
     }
 }
 
@@ -55,6 +87,34 @@ impl SpritesClient {
             return Err(anyhow!("create sprite failed ({status}): {body}"));
         }
         Ok(())
+    }
+
+    /// List every sprite in the org. GET /v1/sprites.
+    ///
+    /// The response shape has shifted across Sprites.dev versions (a bare array
+    /// vs. `{ "sprites": [...] }` vs. `{ "data": [...] }`), so we parse the body
+    /// as untyped JSON and pull the array out of whichever envelope it arrived in.
+    pub async fn list_sprites(&self) -> anyhow::Result<Vec<SpriteSummary>> {
+        let resp = self
+            .http
+            .get(self.url("/sprites"))
+            .header("Authorization", self.bearer())
+            .send()
+            .await
+            .context("sprites list request failed")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("list sprites failed ({status}): {body}"));
+        }
+        let body: serde_json::Value = resp.json().await.context("sprites list: invalid JSON")?;
+        let arr = body
+            .as_array()
+            .or_else(|| body.get("sprites").and_then(|v| v.as_array()))
+            .or_else(|| body.get("data").and_then(|v| v.as_array()))
+            .cloned()
+            .unwrap_or_default();
+        Ok(arr.iter().filter_map(SpriteSummary::from_value).collect())
     }
 
     /// Run a command via the simple HTTP exec endpoint (non-TTY).

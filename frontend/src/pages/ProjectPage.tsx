@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, Project } from "../api";
 import { useBuilds } from "../stores/builds";
-import { BuildBody, buildDuration, isActive } from "../components/build";
+import { buildDuration, isActive } from "../components/build";
 
 // ---------------------------------------------------------------------------
 // page
@@ -17,8 +17,8 @@ export default function ProjectPage() {
   const createBuild = useBuilds((s) => s.create);
   const builds = useMemo(() => (id && byProject[id]) || [], [id, byProject]);
 
+  const navigate = useNavigate();
   const [project, setProject] = useState<Project | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [triggering, setTriggering] = useState(false);
   const [commit, setCommit] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -54,7 +54,7 @@ export default function ProjectPage() {
     try {
       const b = await createBuild(id, commit);
       setCommit("");
-      setSelectedId(b.id);
+      navigate(`/builds/${b.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -118,62 +118,14 @@ export default function ProjectPage() {
                     Open ↗
                   </a>
                 )}
-                <button
-                  className="secondary"
-                  onClick={() => setSelectedId(selectedId === b.id ? null : b.id)}
-                >
-                  {selectedId === b.id ? "Hide" : "Details"}
-                </button>
+                <Link className="secondary" to={`/builds/${b.id}`}>
+                  Details
+                </Link>
               </div>
             </div>
           ))}
         </div>
       )}
-
-      {selectedId && <BuildDetail buildId={selectedId} onClose={() => setSelectedId(null)} />}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// build detail + live diagnostics
-// ---------------------------------------------------------------------------
-
-function BuildDetail({ buildId, onClose }: { buildId: string; onClose: () => void }) {
-  const build = useBuilds((s) => s.byId[buildId]);
-  const loadBuild = useBuilds((s) => s.loadBuild);
-  const [now, setNow] = useState(Date.now());
-
-  useEffect(() => {
-    loadBuild(buildId).catch(() => {});
-    const t = setInterval(() => {
-      setNow(Date.now());
-      loadBuild(buildId).catch(() => {});
-    }, 1500);
-    return () => clearInterval(t);
-  }, [buildId, loadBuild]);
-
-  if (!build) return null;
-
-  const live = isActive(build);
-
-  return (
-    <div className="card">
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0 }}>
-          Build <span className="mono">{build.id.slice(0, 8)}</span>{" "}
-          <span className={"badge " + build.status}>{build.status}</span>{" "}
-          {live && <span className="spin">⟳</span>}
-        </h3>
-        <div className="row">
-          <Link to={`/builds/${build.id}`}>Open ↗</Link>
-          <button className="secondary" onClick={onClose}>
-            Close
-          </button>
-        </div>
-      </div>
-
-      <BuildBody build={build} now={now} />
     </div>
   );
 }

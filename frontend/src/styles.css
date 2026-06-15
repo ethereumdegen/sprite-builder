@@ -58,6 +58,20 @@ button:hover { filter: brightness(1.1); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 button.secondary { background: transparent; border: 1px solid var(--border); color: var(--text); }
 button.danger { background: var(--red); }
+/* Links that should render as a secondary button (e.g. "Details" → build page). */
+a.secondary {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font-size: 14px;
+  cursor: pointer;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+}
+a.secondary:hover { filter: brightness(1.1); }
 
 input, select {
   background: var(--bg);
@@ -201,6 +215,32 @@ pre.logs {
 }
 .admin tbody tr:last-child td { border-bottom: none; }
 button.secondary.selected { border-color: var(--accent, #2f81f7); color: var(--text); }
+
+/* Admin section tabs: text label with an underline; the active one is thicker. */
+.pills {
+  display: flex;
+  gap: 24px;
+  margin: 16px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+.pills .pill {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 8px 2px;
+  margin-bottom: -1px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid var(--border);
+  transition: color .12s ease, border-color .12s ease;
+}
+.pills .pill:hover { color: var(--text); }
+.pills .pill.active {
+  color: var(--text);
+  border-bottom: 3px solid var(--accent);
+}
 .docs th {
   color: var(--muted);
   font-weight: 600;

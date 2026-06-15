@@ -99,6 +99,21 @@ export interface AdminUser {
   builds: number;
 }
 
+// A live sprites.dev VM, joined to the build that provisioned it (if known).
+// `orphaned` means no build references it anymore — a reclaim candidate.
+export interface AdminSprite {
+  name: string;
+  status: string | null;
+  created_at: string | null;
+  public_url: string;
+  orphaned: boolean;
+  build_id: string | null;
+  build_status: BuildStatus | null;
+  project_id: string | null;
+  project_name: string | null;
+  owner_login: string | null;
+}
+
 class ApiError extends Error {
   status: number;
   constructor(status: number, message: string) {
@@ -169,6 +184,11 @@ export const api = {
     ),
   adminRebuild: (buildId: string) =>
     req<AdminBuild>(`/api/admin/builds/${buildId}/rebuild`, { method: "POST" }),
+  adminSprites: () => req<AdminSprite[]>("/api/admin/sprites"),
+  adminDeleteSprite: (name: string) =>
+    req<void>(`/api/admin/sprites/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  adminSetSpritePublic: (name: string) =>
+    req<void>(`/api/admin/sprites/${encodeURIComponent(name)}/public`, { method: "POST" }),
   adminUsers: () => req<AdminUser[]>("/api/admin/users"),
   adminSetRole: (id: string, role: "user" | "admin") =>
     req<AdminUser>(`/api/admin/users/${id}/role`, {

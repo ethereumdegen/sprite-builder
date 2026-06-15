@@ -4,9 +4,11 @@
 //! checks here.
 
 use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::auth::AdminUser;
@@ -167,6 +169,117 @@ pub async fn rebuild(
     .await?;
 
     Ok(Json(row))
+}
+
+// ---------------------------------------------------------------------------
+// sprites (live sprites.dev inventory)
+// ---------------------------------------------------------------------------
+
+/// One row in the admin Sprites index: a live sprite on sprites.dev, joined to
+/// the build/project/owner that provisioned it (when we can identify one).
+///
+/// A sprite is a sprites.dev VM — lower level than our own `builds` abstraction,
+/// which layers on top of one. `orphaned` flags a sprite that no longer maps to
+/// any build we know about (left behind by a deleted build, a failed cleanup, or
+/// created out-of-band) so it can be reclaimed.
+#[derive(Serialize)]
+pub struct AdminSprite {
+    pub name: String,
+    pub status: Option<String>,
+    pub created_at: Option<String>,
+    pub public_url: String,
+    pub orphaned: bool,
+    pub build_id: Option<Uuid>,
+    pub build_status: Option<String>,
+    pub project_id: Option<Uuid>,
+    pub project_name: Option<String>,
+    pub owner_login: Option<String>,
+}
+
+/// The most recent build that used a given sprite, keyed by sprite name.
+#[derive(sqlx::FromRow)]
+struct SpriteBuildRow {
+    sprite_name: String,
+    build_id: Uuid,
+    build_status: String,
+    project_id: Uuid,
+    project_name: String,
+    owner_login: String,
+}
+
+/// Every sprite currently live on sprites.dev, annotated with the build that
+/// owns it. Reads through to the sprites.dev API (not our DB) for the source of
+/// truth on what is actually running, then enriches with our own records.
+pub async fn sprites(
+    State(app): State<AppState>,
+    _admin: AdminUser,
+) -> AppResult<Json<Vec<AdminSprite>>> {
+    let live = app.sprites.list_sprites().await?;
+
+    // One query for the latest build per sprite name, then index by name.
+    let names: Vec<String> = live.iter().map(|s| s.name.clone()).collect();
+    let rows = sqlx::query_as::<_, SpriteBuildRow>(
+        r#"SELECT DISTINCT ON (b.sprite_name)
+              b.sprite_name    AS sprite_name,
+              b.id             AS build_id,
+              b.status         AS build_status,
+              b.project_id     AS project_id,
+              p.name           AS project_name,
+              u.github_login   AS owner_login
+           FROM builds b
+           JOIN projects p ON p.id = b.project_id
+           JOIN users u    ON u.id = p.user_id
+           WHERE b.sprite_name = ANY($1)
+           ORDER BY b.sprite_name, b.created_at DESC"#,
+    )
+    .bind(&names)
+    .fetch_all(&app.db)
+    .await?;
+    let by_name: HashMap<String, SpriteBuildRow> =
+        rows.into_iter().map(|r| (r.sprite_name.clone(), r)).collect();
+
+    let out = live
+        .into_iter()
+        .map(|s| {
+            let link = by_name.get(&s.name);
+            AdminSprite {
+                public_url: app.sprites.public_url(&s.name),
+                orphaned: link.is_none(),
+                build_id: link.map(|l| l.build_id),
+                build_status: link.map(|l| l.build_status.clone()),
+                project_id: link.map(|l| l.project_id),
+                project_name: link.map(|l| l.project_name.clone()),
+                owner_login: link.map(|l| l.owner_login.clone()),
+                name: s.name,
+                status: s.status,
+                created_at: s.created_at,
+            }
+        })
+        .collect();
+
+    Ok(Json(out))
+}
+
+/// Tear down a sprite on sprites.dev. Useful for reclaiming orphaned or stuck
+/// sprites directly from the dashboard.
+pub async fn delete_sprite(
+    State(app): State<AppState>,
+    _admin: AdminUser,
+    Path(name): Path<String>,
+) -> AppResult<StatusCode> {
+    app.sprites.delete_sprite(&name).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Make a sprite's public URL reachable without sprite-org auth (mirrors
+/// `sprite url update --auth public`).
+pub async fn set_sprite_public(
+    State(app): State<AppState>,
+    _admin: AdminUser,
+    Path(name): Path<String>,
+) -> AppResult<StatusCode> {
+    app.sprites.set_url_public(&name).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------

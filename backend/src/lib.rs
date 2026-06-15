@@ -34,15 +34,20 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Build the full application state from config: connect the DB pool, create
+    /// Build the full application state from config: create the (lazy) DB pool,
     /// the HTTP client, and wire up the sprites client.
     pub async fn from_config(config: Config) -> anyhow::Result<Self> {
         let config = Arc::new(config);
 
+        // Lazy connect: build the pool without dialing Postgres so boot never
+        // hangs/aborts if the DB is briefly unreachable (e.g. Railway's internal
+        // network coming up after the app). Connections are established on first
+        // use; `acquire_timeout` bounds that so a request-path query returns a
+        // clean error (ADR-0012) instead of hanging forever.
         let db = PgPoolOptions::new()
             .max_connections(config.db_max_connections)
-            .connect(&config.database_url)
-            .await?;
+            .acquire_timeout(Duration::from_secs(10))
+            .connect_lazy(&config.database_url)?;
 
         // A long timeout so docker builds inside sprites can run to completion
         // over the synchronous exec endpoint.
@@ -116,6 +121,12 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/admin/stats", get(admin::stats))
         .route("/api/admin/builds", get(admin::builds))
         .route("/api/admin/builds/:id/rebuild", post(admin::rebuild))
+        .route("/api/admin/sprites", get(admin::sprites))
+        .route("/api/admin/sprites/:name", delete(admin::delete_sprite))
+        .route(
+            "/api/admin/sprites/:name/public",
+            post(admin::set_sprite_public),
+        )
         .route("/api/admin/users", get(admin::users))
         .route("/api/admin/users/:id/role", patch(admin::set_role))
         .layer(cors)
