@@ -1,0 +1,13 @@
+# Clippy configuration (enforcement for ADRs; see /enforcement/README.md).
+# Lint *levels* live in Cargo.toml's [lints] table; this file holds clippy's
+# tunables. Disallow constructs that violate cross-cutting ADRs.
+
+# ADR 0013 — never log secrets / never println!: steer away from std print macros
+# (also denied as lints in Cargo.toml). Disallowed methods are reported by the
+# `clippy::disallowed_methods` lint.
+disallowed-methods = [
+    { path = "std::env::set_var", reason = "config is loaded once at boot (ADR 0005); do not mutate the environment at runtime" },
+]
+
+# Flag obviously-too-large types/functions early.
+too-many-arguments-threshold = 8

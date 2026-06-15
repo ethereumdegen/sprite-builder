@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE builds\n           SET status = $2, url = $3, logs = $4, error = $5, metadata = $6,\n               finished_at = now(), updated_at = now()\n           WHERE id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "1a90b6c6b50b2b139f3c34c8bd45f777554a2168de7b11c3777d980cf8b6c649"
+}

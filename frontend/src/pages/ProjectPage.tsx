@@ -1,6 +1,7 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Build, Project } from "../api";
+import { useBuilds } from "../stores/builds";
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -38,43 +39,53 @@ function classifyLine(line: string): string {
 
 export default function ProjectPage() {
   const { id } = useParams<{ id: string }>();
+  // Select the stable map and derive the list outside the selector — returning a
+  // fresh [] from the selector would change identity every render.
+  const byProject = useBuilds((s) => s.byProject);
+  const loadForProject = useBuilds((s) => s.loadForProject);
+  const createBuild = useBuilds((s) => s.create);
+  const builds = useMemo(() => (id && byProject[id]) || [], [id, byProject]);
+
   const [project, setProject] = useState<Project | null>(null);
-  const [builds, setBuilds] = useState<Build[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [triggering, setTriggering] = useState(false);
   const [commit, setCommit] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
 
-  const loadBuilds = () => id && api.builds(id).then(setBuilds).catch(() => {});
+  const loadBuilds = useCallback(() => {
+    if (id) loadForProject(id).catch(() => {});
+  }, [id, loadForProject]);
 
   useEffect(() => {
     if (!id) return;
     api.project(id).then(setProject).catch(() => {});
     loadBuilds();
-  }, [id]);
+  }, [id, loadBuilds]);
 
   // Poll the list quickly while a build is in flight; keep a 1s clock for live durations.
   useEffect(() => {
     const active = builds.some(isActive);
-    const t = setInterval(() => {
-      setNow(Date.now());
-      if (active) loadBuilds();
-    }, active ? 2000 : 15000);
+    const t = setInterval(
+      () => {
+        setNow(Date.now());
+        if (active) loadBuilds();
+      },
+      active ? 2000 : 15000
+    );
     return () => clearInterval(t);
-  }, [builds, id]);
+  }, [builds, loadBuilds]);
 
   const trigger = async () => {
     if (!id) return;
     setTriggering(true);
     setError(null);
     try {
-      const b = await api.createBuild(id, commit.trim() || undefined);
+      const b = await createBuild(id, commit);
       setCommit("");
       setSelectedId(b.id);
-      loadBuilds();
-    } catch (e: any) {
-      setError(String(e.message || e));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setTriggering(false);
     }
@@ -158,32 +169,22 @@ export default function ProjectPage() {
 // ---------------------------------------------------------------------------
 
 function BuildDetail({ buildId, onClose }: { buildId: string; onClose: () => void }) {
-  const [build, setBuild] = useState<Build | null>(null);
+  const build = useBuilds((s) => s.byId[buildId]);
+  const loadBuild = useBuilds((s) => s.loadBuild);
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    let alive = true;
-    const fetchOnce = () => api.build(buildId).then((b) => alive && setBuild(b)).catch(() => {});
-    fetchOnce();
+    loadBuild(buildId).catch(() => {});
     const t = setInterval(() => {
       setNow(Date.now());
-      api
-        .build(buildId)
-        .then((b) => {
-          if (!alive) return;
-          setBuild(b);
-        })
-        .catch(() => {});
+      loadBuild(buildId).catch(() => {});
     }, 1500);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
-  }, [buildId]);
+    return () => clearInterval(t);
+  }, [buildId, loadBuild]);
 
   if (!build) return null;
 
-  const ready = (build.metadata as any)?.ready;
+  const ready = build.metadata?.ready;
   const live = isActive(build);
 
   return (
@@ -302,7 +303,7 @@ function LogView({ text, live }: { text: string; live: boolean }) {
               : ln;
             return (
               <div key={i} className={"log-line " + classifyLine(ln)}>
-                {display || " "}
+                {display || " "}
               </div>
             );
           })

@@ -1,11 +1,16 @@
 // Typed client for the sprite-builder backend. All requests use the session
-// cookie (same-origin via the Vite proxy in dev).
+// cookie (same-origin via the Vite proxy in dev). This is the single point of
+// contact with the backend (ADR 0008) — components never call fetch directly.
+
+export type Capability = "view_admin_dashboard" | "manage_users";
 
 export interface User {
   id: string;
   github_login: string;
   name: string | null;
   avatar_url: string | null;
+  role: "user" | "admin";
+  capabilities: Capability[];
 }
 
 export interface Repo {
@@ -54,6 +59,44 @@ export interface ApiKey {
   key_prefix: string;
   last_used_at: string | null;
   created_at: string;
+}
+
+// --- admin dashboard ---
+
+export interface AdminStats {
+  users: number;
+  projects: number;
+  builds_total: number;
+  builds_queued: number;
+  builds_running: number;
+  builds_succeeded: number;
+  builds_failed: number;
+}
+
+export interface AdminBuild {
+  id: string;
+  status: BuildStatus;
+  commit_sha: string;
+  sprite_name: string | null;
+  url: string | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  project_id: string;
+  project_name: string;
+  repo_full_name: string;
+  owner_login: string;
+}
+
+export interface AdminUser {
+  id: string;
+  github_login: string;
+  name: string | null;
+  role: "user" | "admin";
+  created_at: string;
+  projects: number;
+  builds: number;
 }
 
 class ApiError extends Error {
@@ -117,6 +160,19 @@ export const api = {
       body: JSON.stringify({ name }),
     }),
   deleteKey: (id: string) => req<{ ok: boolean }>(`/api/keys/${id}`, { method: "DELETE" }),
+
+  // admin
+  adminStats: () => req<AdminStats>("/api/admin/stats"),
+  adminBuilds: (status?: string) =>
+    req<AdminBuild[]>(
+      `/api/admin/builds${status ? `?status=${encodeURIComponent(status)}` : ""}`
+    ),
+  adminUsers: () => req<AdminUser[]>("/api/admin/users"),
+  adminSetRole: (id: string, role: "user" | "admin") =>
+    req<AdminUser>(`/api/admin/users/${id}/role`, {
+      method: "PATCH",
+      body: JSON.stringify({ role }),
+    }),
 };
 
 export { ApiError };

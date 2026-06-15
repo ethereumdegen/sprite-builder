@@ -1,34 +1,31 @@
 import { useEffect, useState } from "react";
-import { api, ApiKey } from "../api";
+import { useKeys } from "../stores/keys";
 
 export default function ApiKeysPage() {
-  const [keys, setKeys] = useState<ApiKey[]>([]);
+  const { keys, load, create, remove } = useKeys();
   const [name, setName] = useState("");
   const [newSecret, setNewSecret] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
 
-  const load = () => api.keys().then(setKeys);
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
-  const create = async () => {
+  const onCreate = async () => {
     if (!name.trim()) return;
     setCreating(true);
     try {
-      const res = await api.createKey(name.trim());
+      const res = await create(name.trim());
       setNewSecret(res.secret);
       setName("");
-      load();
     } finally {
       setCreating(false);
     }
   };
 
-  const remove = async (id: string) => {
+  const onRemove = async (id: string) => {
     if (!confirm("Revoke this key? Any client using it will stop working.")) return;
-    await api.deleteKey(id);
-    load();
+    await remove(id);
   };
 
   return (
@@ -50,7 +47,7 @@ export default function ApiKeysPage() {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <button onClick={create} disabled={creating} style={{ whiteSpace: "nowrap" }}>
+          <button onClick={onCreate} disabled={creating} style={{ whiteSpace: "nowrap" }}>
             {creating ? "Creating…" : "Create"}
           </button>
         </div>
@@ -81,7 +78,7 @@ export default function ApiKeysPage() {
                     ? `last used ${new Date(k.last_used_at).toLocaleDateString()}`
                     : "never used"}
                 </span>
-                <button className="danger" onClick={() => remove(k.id)}>
+                <button className="danger" onClick={() => onRemove(k.id)}>
                   Revoke
                 </button>
               </div>

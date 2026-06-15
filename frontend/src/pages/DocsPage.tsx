@@ -27,7 +27,7 @@ function Code({ children }: { children: string }) {
   );
 }
 
-function Method({ m }: { m: "GET" | "POST" | "DELETE" }) {
+function Method({ m }: { m: "GET" | "POST" | "DELETE" | "PATCH" }) {
   return <span className={`method ${m.toLowerCase()}`}>{m}</span>;
 }
 
@@ -52,6 +52,7 @@ export default function DocsPage() {
         <a href="#projects">Projects</a>
         <a href="#builds">Builds</a>
         <a href="#build-object">The build object</a>
+        <a href="#admin">Admin</a>
         <a href="#errors">Errors</a>
       </div>
 
@@ -439,6 +440,44 @@ done`}</Code>
           </tr>
         </tbody>
       </table>
+
+      {/* ------------------------------------------------------------------ */}
+      <h3 id="admin">Admin</h3>
+      <p>
+        Admin-only endpoints give app-wide visibility across every user. They
+        require the <code>view_admin_dashboard</code> capability (the{" "}
+        <code>admin</code> role); other users receive <code>403</code>. Bootstrap
+        the first admin with the <code>ADMIN_GITHUB_LOGINS</code> env var, then
+        manage roles from the dashboard.
+      </p>
+
+      <h4>
+        <Method m="GET" /> <span className="mono">/api/admin/stats</span>
+      </h4>
+      <p>App-wide counts: users, projects, and builds by status.</p>
+
+      <h4>
+        <Method m="GET" /> <span className="mono">/api/admin/builds</span>
+      </h4>
+      <p>
+        Every build across all users, newest first, with owner/project context.
+        Optional query params: <code>status</code> (
+        <code>queued|running|succeeded|failed</code>) and <code>limit</code>{" "}
+        (default 200, max 1000).
+      </p>
+
+      <h4>
+        <Method m="GET" /> <span className="mono">/api/admin/users</span>
+      </h4>
+      <p>All users with their role and per-user project/build counts.</p>
+
+      <h4>
+        <Method m="PATCH" /> <span className="mono">/api/admin/users/:id/role</span>
+      </h4>
+      <p>
+        Set a user's role. Body: <code>{`{ "role": "user" | "admin" }`}</code>.
+        You can't change your own role.
+      </p>
 
       {/* ------------------------------------------------------------------ */}
       <h3 id="errors">Errors</h3>

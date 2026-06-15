@@ -1,21 +1,15 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, Project, Repo } from "../api";
+import { api, Repo } from "../api";
+import { useProjects } from "../stores/projects";
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { projects, loading, load } = useProjects();
   const [creating, setCreating] = useState(false);
-
-  const load = () =>
-    api
-      .projects()
-      .then(setProjects)
-      .finally(() => setLoading(false));
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   return (
     <div>
@@ -26,15 +20,7 @@ export default function ProjectsPage() {
         </button>
       </div>
 
-      {creating && (
-        <NewProject
-          onCreated={() => {
-            setCreating(false);
-            setLoading(true);
-            load();
-          }}
-        />
-      )}
+      {creating && <NewProject onCreated={() => setCreating(false)} />}
 
       {loading ? (
         <p className="muted">Loading…</p>
@@ -60,6 +46,7 @@ export default function ProjectsPage() {
 }
 
 function NewProject({ onCreated }: { onCreated: () => void }) {
+  const createProject = useProjects((s) => s.create);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loadingRepos, setLoadingRepos] = useState(true);
   const [filter, setFilter] = useState("");
@@ -88,7 +75,7 @@ function NewProject({ onCreated }: { onCreated: () => void }) {
     setSubmitting(true);
     setError(null);
     try {
-      await api.createProject({
+      await createProject({
         name: name || selected.name,
         repo_full_name: selected.full_name,
         repo_id: selected.id,
@@ -97,8 +84,8 @@ function NewProject({ onCreated }: { onCreated: () => void }) {
         container_port: port,
       });
       onCreated();
-    } catch (e: any) {
-      setError(String(e.message || e));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
       setSubmitting(false);
     }
   };

@@ -39,14 +39,21 @@ sprite-builder/
 │   │   │   ├── mod.rs        # build worker loop
 │   │   │   └── main.rs       # bin: sprite-builder-worker (background worker)
 │   │   ├── bin/migrate.rs    # bin: migrate              (run migrations)
-│   │   ├── auth.rs           # GitHub OAuth, sessions, API-key bearer extractor
+│   │   ├── auth.rs           # GitHub OAuth, sessions, AuthUser/AdminUser extractors
+│   │   ├── authz.rs          # roles -> capabilities (ADR 0016)
+│   │   ├── admin.rs          # admin dashboard routes (capability-gated)
 │   │   ├── github.rs         # GitHub REST client
 │   │   ├── sprites.rs        # sprites.dev REST client
 │   │   ├── projects.rs       # projects / repos / builds routes
 │   │   ├── models.rs         # DB models
 │   │   ├── config.rs · error.rs
-│   │   └── migrations/0001_init.sql
+│   │   └── migrations/       # 0001_init.sql, 0002_roles.sql
+│   ├── .sqlx/               # committed offline query cache (ADR 0002)
+│   ├── clippy.toml · deny.toml  # lint/dependency enforcement
 ├── frontend/                 # React + Vite SPA
+│   ├── src/stores/          # per-domain Zustand stores (ADR 0007)
+│   └── eslint.config.js     # frontend ADR enforcement
+├── enforcement/              # adr-checks.sh + ADR->mechanism map
 ├── Dockerfile · railway.toml # API server (also serves the built SPA)
 ├── worker/                   # worker Dockerfile + railway.toml
 └── dev.sh                    # run server + worker + frontend locally
@@ -67,6 +74,23 @@ independently (mirrors the `../devops-agent` layout).
 Every `/api/*` route accepts **either** a session cookie **or**
 `Authorization: Bearer <api-key>`, so the same endpoints power the UI and
 programmatic access.
+
+## Roles & the admin dashboard
+
+Every user has a **role** — `user` (default) or `admin`. Authorization is
+**capability-based**: a role maps to a set of capabilities (`backend/src/authz.rs`),
+and protected routes are gated by a typed `AdminUser` extractor that checks for
+the required capability — never an inline role-string comparison.
+
+Admins get an **`/admin` dashboard** with app-wide visibility: live counts,
+every build job across all users (filterable by status, with owner/project/commit
+and error diagnostics), and a user list where they can promote/demote others.
+
+**Bootstrapping the first admin:** set `ADMIN_GITHUB_LOGINS` to a comma-separated
+list of GitHub logins. Those users are promoted to `admin` on their next login.
+It only ever *promotes* — dropping a login from the list never demotes someone.
+After that, admins can manage roles from the dashboard. (You can also flip a role
+directly: `UPDATE users SET role='admin' WHERE github_login='…';`.)
 
 ## Setup
 
@@ -133,7 +157,11 @@ optional `WORKER_POLL_SECS` / `DB_MAX_CONNECTIONS`) — it does **not** need
 | `BIND_ADDR`            |          | `0.0.0.0:8787`               | server             | Address/port the API server listens on.                                     |
 | `WORKER_POLL_SECS`     |          | `5`                          | worker             | How often the worker polls for queued builds.                               |
 | `DB_MAX_CONNECTIONS`   |          | `10`                         | server, worker     | Postgres pool size per process.                                             |
+| `ADMIN_GITHUB_LOGINS`  |          | _(empty)_                    | server             | Comma-separated GitHub logins auto-promoted to `admin` on login (promote-only). |
 | `STATIC_DIR`           |          | _(empty)_                    | server             | Dir of built SPA assets to serve. Empty in dev (Vite serves it); set to `/app/static` in the Docker image. |
+
+> `WORKER_POLL_SECS` and `DB_MAX_CONNECTIONS` fail fast on a malformed value
+> rather than silently falling back to the default (ADR 0005).
 
 > ⚠️ The OAuth callback registered on the GitHub app must be exactly
 > `<BACKEND_URL>/api/auth/github/callback` — so `http://localhost:5173/api/auth/github/callback`
@@ -177,6 +205,12 @@ curl -H "Authorization: Bearer $KEY" $BASE/api/builds/<build-id>
 | GET    | `/api/builds/:id`                 | build status, logs, url, metadata    |
 | GET/POST | `/api/keys`                     | list / create API keys              |
 | DELETE | `/api/keys/:id`                   | revoke an API key                    |
+| GET    | `/api/admin/stats`                | **admin** — app-wide counts          |
+| GET    | `/api/admin/builds`               | **admin** — all builds (`?status=&limit=`) |
+| GET    | `/api/admin/users`                | **admin** — users with role + counts |
+| PATCH  | `/api/admin/users/:id/role`       | **admin** — set a user's role        |
+
+> `/api/admin/*` routes require the admin capability; non-admins get `403`.
 
 ## How a build runs (the worker)
 
@@ -252,3 +286,24 @@ services — use reference variables to keep them in sync):
   sqlx takes a Postgres advisory lock so concurrent startup is safe. You can also
   run them explicitly as a deploy step: `cargo run --bin migrate`.
 ```
+
+## ADR compliance
+
+This repo follows the [Architectural Design Records](https://github.com/ethereumdegen/architectural-design-spec).
+Highlights and how each is mechanically enforced live in
+[`enforcement/`](enforcement/README.md):
+
+- **0001** library crate + thin server/worker/migrate bins
+- **0002 / 0015** SQLx with **compile-checked** `query!`/`query_as!` macros; ORMs
+  banned via `cargo deny`. The committed `backend/.sqlx/` cache + `SQLX_OFFLINE=true`
+  let the Docker build compile without a DB.
+- **0003** owner/tenant scoping on all data access · **0004 / 0016** capability-based
+  authz via typed `AuthUser` / `AdminUser` extractors
+- **0005** config from env, fail-fast on malformed values
+- **0006** Postgres job queue with `FOR UPDATE SKIP LOCKED`, no broker
+- **0007** per-domain Zustand stores · **0008** one typed API client
+- **0010** no panics on request paths (boot-only carve-outs) · **0012** errors map
+  to correct HTTP status as `{ "error": … }` · **0013** structured logging only
+
+Run the checks: `./enforcement/adr-checks.sh`,
+`(cd backend && cargo clippy --all-targets -- -D warnings)`.

@@ -28,7 +28,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(3);
 
 /// A `running` build older than this is considered abandoned (worker crashed)
 /// and gets reaped. Must exceed BUILD_TIMEOUT.
-const STALE_MINUTES: i64 = 30;
+const STALE_MINUTES: i32 = 30;
 
 // ---------------------------------------------------------------------------
 // worker entrypoint
@@ -58,7 +58,7 @@ pub async fn run(app: AppState) -> anyhow::Result<()> {
     }
 }
 
-/// #4 — periodically fail builds stuck in `running` (e.g. a worker died).
+/// Periodically fail builds stuck in `running` (e.g. a worker died).
 fn spawn_reaper(db: PgPool) {
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(60));
@@ -74,20 +74,25 @@ fn spawn_reaper(db: PgPool) {
 }
 
 async fn reap_stale(db: &PgPool) -> sqlx::Result<u64> {
-    let sql = format!(
+    Ok(sqlx::query!(
         r#"UPDATE builds
            SET status = 'failed',
                error = 'build did not finish in time (worker lost or timed out); marked stale',
                finished_at = now(), updated_at = now()
-           WHERE status = 'running' AND started_at < now() - interval '{STALE_MINUTES} minutes'"#
-    );
-    Ok(sqlx::query(&sql).execute(db).await?.rows_affected())
+           WHERE status = 'running'
+             AND started_at < now() - make_interval(mins => $1)"#,
+        STALE_MINUTES,
+    )
+    .execute(db)
+    .await?
+    .rows_affected())
 }
 
 /// Atomically claim the oldest queued build using SKIP LOCKED so multiple
 /// worker instances never grab the same row.
 async fn claim_next(db: &PgPool) -> sqlx::Result<Option<Build>> {
-    let build = sqlx::query_as::<_, Build>(
+    let build = sqlx::query_as!(
+        Build,
         r#"
         WITH next AS (
             SELECT id FROM builds
@@ -100,7 +105,10 @@ async fn claim_next(db: &PgPool) -> sqlx::Result<Option<Build>> {
         SET status = 'running', started_at = now(), updated_at = now()
         FROM next
         WHERE builds.id = next.id
-        RETURNING builds.*
+        RETURNING builds.id, builds.project_id, builds.commit_sha, builds.status,
+                  builds.sprite_name, builds.url, builds.logs, builds.error,
+                  builds.metadata, builds.created_at, builds.updated_at,
+                  builds.started_at, builds.finished_at
         "#,
     )
     .fetch_optional(db)
@@ -113,21 +121,33 @@ async fn claim_next(db: &PgPool) -> sqlx::Result<Option<Build>> {
 // ---------------------------------------------------------------------------
 
 async fn run_build(app: &AppState, build: Build) -> anyhow::Result<()> {
-    let project = sqlx::query_as::<_, Project>("SELECT * FROM projects WHERE id = $1")
-        .bind(build.project_id)
-        .fetch_one(&app.db)
-        .await?;
-    let owner = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
-        .bind(project.user_id)
-        .fetch_one(&app.db)
-        .await?;
+    let project = sqlx::query_as!(
+        Project,
+        r#"SELECT id, user_id, name, repo_full_name, repo_id, default_branch,
+                  dockerfile_path, container_port, created_at
+           FROM projects WHERE id = $1"#,
+        build.project_id,
+    )
+    .fetch_one(&app.db)
+    .await?;
+    let owner = sqlx::query_as!(
+        User,
+        r#"SELECT id, github_id, github_login, name, avatar_url, github_token,
+                  created_at, updated_at, role
+           FROM users WHERE id = $1"#,
+        project.user_id,
+    )
+    .fetch_one(&app.db)
+    .await?;
 
     let sprite_name = format!("build-{}", &build.id.simple().to_string()[..12]);
-    sqlx::query("UPDATE builds SET sprite_name = $1, updated_at = now() WHERE id = $2")
-        .bind(&sprite_name)
-        .bind(build.id)
-        .execute(&app.db)
-        .await?;
+    sqlx::query!(
+        "UPDATE builds SET sprite_name = $1, updated_at = now() WHERE id = $2",
+        sprite_name,
+        build.id,
+    )
+    .execute(&app.db)
+    .await?;
 
     let base_meta = |ready: serde_json::Value| {
         serde_json::json!({
@@ -328,11 +348,13 @@ fn redact(s: &str, token: &str) -> String {
 }
 
 async fn update_logs(db: &PgPool, id: Uuid, logs: &str) -> sqlx::Result<()> {
-    sqlx::query("UPDATE builds SET logs = $2, updated_at = now() WHERE id = $1")
-        .bind(id)
-        .bind(logs)
-        .execute(db)
-        .await?;
+    sqlx::query!(
+        "UPDATE builds SET logs = $2, updated_at = now() WHERE id = $1",
+        id,
+        logs,
+    )
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -354,18 +376,19 @@ async fn probe_until_ready(http: &reqwest::Client, url: &str) -> bool {
 
 /// #5 — delete every sprite this project used except the one we want to keep.
 async fn cleanup_prior_sprites(app: &AppState, project_id: Uuid, keep: &str) {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT DISTINCT sprite_name FROM builds \
-         WHERE project_id = $1 AND sprite_name IS NOT NULL AND sprite_name <> $2",
+    let rows = sqlx::query!(
+        r#"SELECT DISTINCT sprite_name AS "sprite_name!"
+           FROM builds
+           WHERE project_id = $1 AND sprite_name IS NOT NULL AND sprite_name <> $2"#,
+        project_id,
+        keep,
     )
-    .bind(project_id)
-    .bind(keep)
     .fetch_all(&app.db)
     .await
     .unwrap_or_default();
-    for (name,) in rows {
-        tracing::info!("cleaning up old sprite {name}");
-        let _ = app.sprites.delete_sprite(&name).await;
+    for row in rows {
+        tracing::info!("cleaning up old sprite {}", row.sprite_name);
+        let _ = app.sprites.delete_sprite(&row.sprite_name).await;
     }
 }
 
@@ -379,18 +402,18 @@ async fn finish(
     error: Option<&str>,
     metadata: serde_json::Value,
 ) -> sqlx::Result<()> {
-    sqlx::query(
+    sqlx::query!(
         r#"UPDATE builds
            SET status = $2, url = $3, logs = $4, error = $5, metadata = $6,
                finished_at = now(), updated_at = now()
            WHERE id = $1"#,
+        id,
+        status,
+        url,
+        logs,
+        error,
+        metadata,
     )
-    .bind(id)
-    .bind(status)
-    .bind(url)
-    .bind(logs)
-    .bind(error)
-    .bind(metadata)
     .execute(db)
     .await?;
     Ok(())

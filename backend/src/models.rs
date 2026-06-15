@@ -3,6 +3,8 @@ use serde::Serialize;
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use crate::authz::{Capability, Role};
+
 #[derive(Debug, Clone, FromRow)]
 pub struct User {
     pub id: Uuid,
@@ -13,15 +15,31 @@ pub struct User {
     pub github_token: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub role: String,
 }
 
-/// Public view of a user (never leaks the GitHub token).
+impl User {
+    /// The user's role as a typed value (ADR 0016).
+    pub fn role(&self) -> Role {
+        Role::from_db(&self.role)
+    }
+
+    /// Capabilities derived from the user's role.
+    pub fn capabilities(&self) -> &'static [Capability] {
+        self.role().capabilities()
+    }
+}
+
+/// Public view of a user (never leaks the GitHub token). Exposes the role and
+/// its derived capabilities so the frontend can gate UI capability-by-capability.
 #[derive(Debug, Serialize)]
 pub struct UserPublic {
     pub id: Uuid,
     pub github_login: String,
     pub name: Option<String>,
     pub avatar_url: Option<String>,
+    pub role: String,
+    pub capabilities: Vec<Capability>,
 }
 
 impl From<&User> for UserPublic {
@@ -31,6 +49,8 @@ impl From<&User> for UserPublic {
             github_login: u.github_login.clone(),
             name: u.name.clone(),
             avatar_url: u.avatar_url.clone(),
+            role: u.role().as_str().to_string(),
+            capabilities: u.capabilities().to_vec(),
         }
     }
 }

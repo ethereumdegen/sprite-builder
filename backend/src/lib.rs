@@ -1,4 +1,6 @@
+pub mod admin;
 pub mod auth;
+pub mod authz;
 pub mod config;
 pub mod error;
 pub mod github;
@@ -12,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::{header, HeaderValue, Method};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -66,6 +68,7 @@ pub async fn run_migrations(db: &PgPool) -> anyhow::Result<()> {
 }
 
 /// Build the axum router (API routes + optional SPA static serving).
+#[allow(clippy::expect_used)] // boot-phase carve-out (ADR 0010)
 pub fn build_router(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(
@@ -73,6 +76,8 @@ pub fn build_router(state: AppState) -> Router {
                 .config
                 .frontend_url
                 .parse::<HeaderValue>()
+                // Boot-phase carve-out (ADR 0010): a misconfigured FRONTEND_URL
+                // should fail fast at startup, not per request.
                 .expect("invalid FRONTEND_URL"),
         )
         .allow_credentials(true)
@@ -107,6 +112,11 @@ pub fn build_router(state: AppState) -> Router {
             get(projects::list_builds).post(projects::create_build),
         )
         .route("/api/builds/:id", get(projects::get_build))
+        // admin dashboard (capability-gated by the AdminUser extractor)
+        .route("/api/admin/stats", get(admin::stats))
+        .route("/api/admin/builds", get(admin::builds))
+        .route("/api/admin/users", get(admin::users))
+        .route("/api/admin/users/:id/role", patch(admin::set_role))
         .layer(cors)
         .with_state(state.clone());
 

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE builds\n           SET status = 'failed',\n               error = 'build did not finish in time (worker lost or timed out); marked stale',\n               finished_at = now(), updated_at = now()\n           WHERE status = 'running'\n             AND started_at < now() - make_interval(mins => $1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a016871720428eede40d906c13dd289ee4a8fcdb3aefeb71135f57b6bfd4dca0"
+}

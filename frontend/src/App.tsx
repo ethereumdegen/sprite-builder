@@ -1,23 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Link, Navigate, Route, Routes, useNavigate } from "react-router-dom";
-import { api, User } from "./api";
+import { User } from "./api";
+import { useAuth } from "./stores/auth";
 import Login from "./pages/Login";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
 import DocsPage from "./pages/DocsPage";
+import AdminPage from "./pages/AdminPage";
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user, loading, loadMe } = useAuth();
 
   useEffect(() => {
-    api
-      .me()
-      .then(setUser)
-      .catch(() => setUser(null))
-      .finally(() => setLoading(false));
-  }, []);
+    loadMe();
+  }, [loadMe]);
 
   if (loading) {
     return <div className="container">Loading…</div>;
@@ -29,13 +26,14 @@ export default function App() {
 
   return (
     <>
-      <Nav user={user} onLogout={() => setUser(null)} />
+      <Nav user={user} />
       <div className="container">
         <Routes>
           <Route path="/" element={<ProjectsPage />} />
           <Route path="/projects/:id" element={<ProjectPage />} />
           <Route path="/keys" element={<ApiKeysPage />} />
           <Route path="/docs" element={<DocsPage />} />
+          <Route path="/admin" element={<AdminRoute />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
@@ -43,11 +41,18 @@ export default function App() {
   );
 }
 
-function Nav({ user, onLogout }: { user: User; onLogout: () => void }) {
+/// Capability-gated route: non-admins are redirected home (ADR 0016).
+function AdminRoute() {
+  const can = useAuth((s) => s.can);
+  return can("view_admin_dashboard") ? <AdminPage /> : <Navigate to="/" replace />;
+}
+
+function Nav({ user }: { user: User }) {
   const navigate = useNavigate();
-  const logout = async () => {
-    await api.logout();
-    onLogout();
+  const logout = useAuth((s) => s.logout);
+  const can = useAuth((s) => s.can);
+  const onLogout = async () => {
+    await logout();
     navigate("/");
   };
   return (
@@ -56,10 +61,11 @@ function Nav({ user, onLogout }: { user: User; onLogout: () => void }) {
       <Link to="/">Projects</Link>
       <Link to="/keys">API Keys</Link>
       <Link to="/docs">Docs</Link>
+      {can("view_admin_dashboard") && <Link to="/admin">Admin</Link>}
       <span className="spacer" />
       {user.avatar_url && <img className="avatar" src={user.avatar_url} alt="" />}
       <span className="muted">{user.github_login}</span>
-      <button className="secondary" onClick={logout}>
+      <button className="secondary" onClick={onLogout}>
         Logout
       </button>
     </div>

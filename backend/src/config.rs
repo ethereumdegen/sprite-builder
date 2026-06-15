@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use anyhow::Context;
 
 /// Runtime configuration, loaded from environment variables.
@@ -24,6 +26,11 @@ pub struct Config {
     pub db_max_connections: u32,
     /// Directory of built frontend assets to serve (empty = don't serve a SPA).
     pub static_dir: String,
+
+    /// GitHub logins (lowercased) seeded as admins on login. Lets you bootstrap
+    /// the first admin without touching the database. Promotes only — removing a
+    /// login here never demotes an already-admin user.
+    pub admin_github_logins: Vec<String>,
 }
 
 fn env(key: &str) -> anyhow::Result<String> {
@@ -32,6 +39,28 @@ fn env(key: &str) -> anyhow::Result<String> {
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// Parse an optional, typed env var, failing fast on a malformed value
+/// (ADR 0005) instead of silently falling back to the default.
+fn env_parse<T>(key: &str, default: T) -> anyhow::Result<T>
+where
+    T: FromStr,
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(key) {
+        Ok(raw) => raw
+            .parse::<T>()
+            .map_err(|e| anyhow::anyhow!("invalid value for {key} ({raw:?}): {e}")),
+        Err(_) => Ok(default),
+    }
+}
+
+fn parse_admin_logins(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(|s| s.trim().to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 impl Config {
@@ -71,13 +100,10 @@ impl Config {
             github_client_secret: oauth("GITHUB_CLIENT_SECRET")?,
             sprites_token: env("SPRITES_TOKEN")?,
             sprites_org: env("SPRITES_ORG")?,
-            worker_poll_secs: env_or("WORKER_POLL_SECS", "5")
-                .parse()
-                .unwrap_or(5),
-            db_max_connections: env_or("DB_MAX_CONNECTIONS", "10")
-                .parse()
-                .unwrap_or(10),
+            worker_poll_secs: env_parse("WORKER_POLL_SECS", 5u64)?,
+            db_max_connections: env_parse("DB_MAX_CONNECTIONS", 10u32)?,
             static_dir: env_or("STATIC_DIR", ""),
+            admin_github_logins: parse_admin_logins(&env_or("ADMIN_GITHUB_LOGINS", "")),
         })
     }
 
@@ -98,5 +124,11 @@ impl Config {
             .as_deref()
             .context("GITHUB_CLIENT_SECRET not configured")?;
         Ok((id, secret))
+    }
+
+    /// Whether a GitHub login should be seeded as an admin (case-insensitive).
+    pub fn is_seed_admin(&self, login: &str) -> bool {
+        let login = login.to_lowercase();
+        self.admin_github_logins.contains(&login)
     }
 }

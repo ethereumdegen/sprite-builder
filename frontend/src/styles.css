@@ -184,14 +184,23 @@ pre.logs {
   word-break: break-word;
 }
 
-.docs table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
-.docs th, .docs td {
+.docs table, .admin table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+.docs th, .docs td, .admin th, .admin td {
   text-align: left;
   padding: 7px 10px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
   font-size: 13px;
 }
+.admin th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.admin tbody tr:last-child td { border-bottom: none; }
+button.secondary.selected { border-color: var(--accent, #2f81f7); color: var(--text); }
 .docs th {
   color: var(--muted);
   font-weight: 600;
@@ -218,6 +227,7 @@ pre.logs {
 .method.get { background: rgba(47,129,247,0.15); color: var(--accent); }
 .method.post { background: rgba(63,185,80,0.15); color: var(--green); }
 .method.delete { background: rgba(248,81,73,0.15); color: var(--red); }
+.method.patch { background: rgba(210,153,34,0.15); color: var(--yellow); }
 
 .codewrap { position: relative; }
 .codewrap .copybtn {

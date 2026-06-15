@@ -1,3 +1,17 @@
+# Crate-level lints enforce several ADRs mechanically (see enforcement/).
+# ADR 0013: never print to stdout/stderr — structured logging only.
+# ADR 0010: no panics on request paths (boot sites carry an explicit #[allow]).
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+print_stdout = "deny"
+print_stderr = "deny"
+dbg_macro = "deny"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
 [package]
 name = "sprite-builder"
 version = "0.1.0"

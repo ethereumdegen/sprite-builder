@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n            (SELECT count(*) FROM users)                              AS \"users!\",\n            (SELECT count(*) FROM projects)                          AS \"projects!\",\n            (SELECT count(*) FROM builds)                            AS \"builds_total!\",\n            (SELECT count(*) FROM builds WHERE status = 'queued')    AS \"builds_queued!\",\n            (SELECT count(*) FROM builds WHERE status = 'running')   AS \"builds_running!\",\n            (SELECT count(*) FROM builds WHERE status = 'succeeded') AS \"builds_succeeded!\",\n            (SELECT count(*) FROM builds WHERE status = 'failed')    AS \"builds_failed!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "users!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "projects!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "builds_total!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "builds_queued!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "builds_running!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 5,
+        "name": "builds_succeeded!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "builds_failed!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "f76916ede51a9610a9afbf00fec56d15d8ca38b22c56a3e8dd178d6f02f43ff7"
+}

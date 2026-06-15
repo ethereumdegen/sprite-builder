@@ -1,0 +1,56 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n              u.id           AS \"id!\",\n              u.github_login AS \"github_login!\",\n              u.name         AS \"name?\",\n              u.role         AS \"role!\",\n              u.created_at   AS \"created_at!\",\n              (SELECT count(*) FROM projects p WHERE p.user_id = u.id) AS \"projects!\",\n              (SELECT count(*) FROM builds b\n                 JOIN projects p ON p.id = b.project_id\n                 WHERE p.user_id = u.id)                               AS \"builds!\"\n           FROM users u\n           ORDER BY u.created_at",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "github_login!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "name?",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "role!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "created_at!",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "projects!",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 6,
+        "name": "builds!",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "2a0860303e31f491d839d4ffb80353c908f69f8377a139bf547ae0aee69b0d2d"
+}

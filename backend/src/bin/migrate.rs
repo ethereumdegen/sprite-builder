@@ -4,6 +4,7 @@ use sqlx::postgres::PgPoolOptions;
 /// Standalone migration runner: `cargo run --bin migrate`.
 /// Only needs DATABASE_URL (handy for CI / deploy release steps).
 #[tokio::main]
+#[allow(clippy::expect_used)] // boot-phase carve-out (ADR 0010)
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
     tracing_subscriber::fmt().with_env_filter("info").init();

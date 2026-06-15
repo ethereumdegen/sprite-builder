@@ -1,0 +1,75 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO users (github_id, github_login, name, avatar_url, github_token, role)\n           VALUES ($1, $2, $3, $4, $5, CASE WHEN $6 THEN 'admin' ELSE 'user' END)\n           ON CONFLICT (github_id) DO UPDATE\n             SET github_login = EXCLUDED.github_login,\n                 name = EXCLUDED.name,\n                 avatar_url = EXCLUDED.avatar_url,\n                 github_token = EXCLUDED.github_token,\n                 role = CASE WHEN $6 THEN 'admin' ELSE users.role END,\n                 updated_at = now()\n           RETURNING id, github_id, github_login, name, avatar_url,\n                     github_token, created_at, updated_at, role",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "github_id",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 2,
+        "name": "github_login",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "avatar_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "github_token",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "created_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 7,
+        "name": "updated_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 8,
+        "name": "role",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c2cf0e849e8c7f8c7522951e3060a04a2c7bab733d047820e1be249b4e42a1c2"
+}
