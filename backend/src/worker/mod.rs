@@ -433,6 +433,16 @@ git -c credential.helper='!f() {{ echo username=x-access-token; echo "password=$
 cd app
 git checkout {sha}
 
+# Work around a sandbox/procfs bug: BuildKit reads /proc/meminfo with a small
+# multi-read pattern, and the sprite's sandboxed procfs returns a torn read for
+# that pattern — fields concatenated with no newlines — which BuildKit rejects
+# ("failed to solve: Internal: error parsing file: Malformed line ..."). A single
+# large read (`cat`) is always clean, so snapshot meminfo once and bind-mount the
+# static copy over /proc/meminfo for the build (we hold CAP_SYS_ADMIN). This keeps
+# full BuildKit support rather than falling back to the legacy builder.
+cat /proc/meminfo > /tmp/meminfo.static
+sudo mount --bind /tmp/meminfo.static /proc/meminfo || echo "==> warning: could not pin /proc/meminfo; build may hit the meminfo parser bug"
+
 echo "==> docker build ({dockerfile})"
 docker build -f "{dockerfile}" -t "{image}" .
 
