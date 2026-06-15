@@ -375,10 +375,21 @@ echo $? >/var/log/sb-build.done"#;
         };
         let _ = update_logs(&app.db, build.id, &logs).await;
 
+        // The success marker is the script's final line, and the script runs under
+        // `set -euo pipefail`, so its presence alone proves every prior step
+        // succeeded. Treat it as authoritative rather than *also* requiring the
+        // separate exit-code done-file: publishing the container port
+        // (`docker run -p`) rewrites iptables and can disrupt the keepalive
+        // session before that last `echo $? > done` lands — the container is
+        // already up and detached at that point. Demanding both signals is what
+        // let a healthy deploy poll all the way to BUILD_TIMEOUT and get its
+        // sprite torn down.
+        if body.contains(SUCCESS_MARKER) {
+            return Ok((logs, url));
+        }
         if let Some(code) = exit {
-            if code == 0 && body.contains(SUCCESS_MARKER) {
-                return Ok((logs, url));
-            }
+            // The script finished (recorded an exit code) without printing the
+            // success marker — an earlier step failed.
             return Err((logs, format!("build script exited with code {code}")));
         }
 
