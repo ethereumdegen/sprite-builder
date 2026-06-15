@@ -113,10 +113,16 @@ pub fn build_router(state: AppState) -> Router {
         )
         .route("/api/projects/:id", get(projects::get_project))
         .route(
+            "/api/projects/:id/env",
+            get(projects::list_env_vars).post(projects::upsert_env_var),
+        )
+        .route("/api/projects/:id/env/:key", delete(projects::delete_env_var))
+        .route(
             "/api/projects/:id/builds",
             get(projects::list_builds).post(projects::create_build),
         )
         .route("/api/builds/:id", get(projects::get_build))
+        .route("/api/builds/:id/runtime-logs", get(projects::runtime_logs))
         // admin dashboard (capability-gated by the AdminUser extractor)
         .route("/api/admin/stats", get(admin::stats))
         .route("/api/admin/builds", get(admin::builds))

@@ -4,6 +4,7 @@
 // rendering lives in exactly one place.
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { Build } from "../api";
+import { useBuilds } from "../stores/builds";
 
 export const isActive = (b: Build) => b.status === "queued" || b.status === "running";
 
@@ -44,7 +45,6 @@ export function Stat({ k, v, block }: { k: string; v: ReactNode; block?: boolean
 /// surrounding chrome (card, header, close button, page layout).
 export function BuildBody({ build, now }: { build: Build; now: number }) {
   const ready = build.metadata?.ready;
-  const live = isActive(build);
 
   return (
     <>
@@ -91,8 +91,50 @@ export function BuildBody({ build, now }: { build: Build; now: number }) {
         </>
       )}
 
-      <label>Logs</label>
-      <LogView text={build.logs} live={live} />
+      <LogTabs build={build} />
+    </>
+  );
+}
+
+/// Deploy (build) logs vs Runtime (`docker logs`) logs, as Railway-style tabs.
+/// Runtime logs are fetched on demand and polled only while the tab is open.
+export function LogTabs({ build }: { build: Build }) {
+  const [tab, setTab] = useState<"deploy" | "runtime">("deploy");
+  const loadRuntime = useBuilds((s) => s.loadRuntime);
+  const runtime = useBuilds((s) => s.runtimeById[build.id]);
+  const live = isActive(build);
+
+  useEffect(() => {
+    if (tab !== "runtime") return;
+    const tick = () => loadRuntime(build.id).catch(() => {});
+    tick();
+    const t = setInterval(tick, live ? 2000 : 5000);
+    return () => clearInterval(t);
+  }, [tab, build.id, loadRuntime, live]);
+
+  return (
+    <>
+      <div className="pills">
+        <button
+          className={"pill" + (tab === "deploy" ? " active" : "")}
+          onClick={() => setTab("deploy")}
+        >
+          Deploy
+        </button>
+        <button
+          className={"pill" + (tab === "runtime" ? " active" : "")}
+          onClick={() => setTab("runtime")}
+        >
+          Runtime
+        </button>
+      </div>
+      {tab === "deploy" ? (
+        <LogView text={build.logs} live={live} />
+      ) : runtime && !runtime.available ? (
+        <p className="muted">{runtime.message || "Runtime logs are not available."}</p>
+      ) : (
+        <LogView text={runtime?.logs || ""} live={live} />
+      )}
     </>
   );
 }

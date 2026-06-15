@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, Project } from "../api";
 import { useBuilds } from "../stores/builds";
 import { buildDuration, isActive } from "../components/build";
+import { VariablesEditor } from "../components/variables";
 
 // ---------------------------------------------------------------------------
 // page
@@ -96,6 +97,8 @@ export default function ProjectPage() {
         </div>
         {error && <p style={{ color: "var(--red)" }}>{error}</p>}
       </div>
+
+      <VariablesEditor projectId={project.id} />
 
       <h3>Builds</h3>
       {builds.length === 0 ? (

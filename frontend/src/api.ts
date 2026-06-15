@@ -61,6 +61,22 @@ export interface ApiKey {
   created_at: string;
 }
 
+export interface ProjectEnvVar {
+  id: string;
+  key: string;
+  value: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// Runtime logs are fetched on demand from the live sprite; `available` is false
+// when there's no deployment yet or the sprite can't be reached.
+export interface RuntimeLogs {
+  available: boolean;
+  logs: string;
+  message: string | null;
+}
+
 // --- admin dashboard ---
 
 export interface AdminStats {
@@ -166,6 +182,19 @@ export const api = {
     req<Build>(`/api/projects/${projectId}/builds`, {
       method: "POST",
       body: JSON.stringify({ commit_sha }),
+    }),
+  runtimeLogs: (buildId: string) => req<RuntimeLogs>(`/api/builds/${buildId}/runtime-logs`),
+
+  // per-project environment variables
+  envVars: (projectId: string) => req<ProjectEnvVar[]>(`/api/projects/${projectId}/env`),
+  setEnvVar: (projectId: string, key: string, value: string) =>
+    req<ProjectEnvVar>(`/api/projects/${projectId}/env`, {
+      method: "POST",
+      body: JSON.stringify({ key, value }),
+    }),
+  deleteEnvVar: (projectId: string, key: string) =>
+    req<{ ok: boolean }>(`/api/projects/${projectId}/env/${encodeURIComponent(key)}`, {
+      method: "DELETE",
     }),
 
   keys: () => req<ApiKey[]>("/api/keys"),

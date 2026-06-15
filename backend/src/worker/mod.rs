@@ -251,8 +251,28 @@ async fn run_on_sprite(
     head.push_str("==> sprite created; uploading build script\n");
     let _ = update_logs(&app.db, build.id, &head).await;
 
+    // Per-project env vars, injected into the container's `docker run` via an
+    // --env-file written inside the sprite. Their values are also collected into
+    // `secrets` below so they're scrubbed from streamed logs (ADR-0013).
+    let env_vars: Vec<(String, String)> = sqlx::query_as(
+        "SELECT key, value FROM project_env_vars WHERE project_id = $1 ORDER BY key",
+    )
+    .bind(project.id)
+    .fetch_all(&app.db)
+    .await
+    .map_err(|e| (head.clone(), format!("load env vars failed: {e}")))?;
+    let env_file = env_vars
+        .iter()
+        .map(|(k, v)| format!("{k}={v}\n"))
+        .collect::<String>();
+    let env_b64 = base64::engine::general_purpose::STANDARD.encode(env_file.as_bytes());
+    let secrets: Vec<String> = std::iter::once(token.clone())
+        .chain(env_vars.iter().map(|(_, v)| v.clone()))
+        .filter(|s| !s.is_empty())
+        .collect();
+
     // Ship the build script as base64 (avoids any shell-quoting hazards).
-    let script = build_script(project, build, &token, sprite);
+    let script = build_script(project, build, &token, sprite, &env_b64);
     let b64 = base64::engine::general_purpose::STANDARD.encode(script.as_bytes());
     let write_cmd = format!("echo '{b64}' | base64 -d > /root/sb-build.sh && echo wrote");
     if let Err(e) = exec_ok(app, sprite, &write_cmd).await {
@@ -332,7 +352,7 @@ echo $? >/var/log/sb-build.done"#;
             }
         };
         let (body, alive, exit) = parse_poll(&raw);
-        let body = redact(&body, &token);
+        let body = redact(&body, &secrets);
 
         // Show real output as it streams; when there's none yet, show a heartbeat
         // (elapsed + process state) instead of a frozen blank panel.
@@ -384,7 +404,13 @@ echo $? >/var/log/sb-build.done"#;
 
 /// The bash script run inside the sprite. Uses a git credential helper (token in
 /// an env var, never in the clone URL) so a failed clone can't echo the token.
-fn build_script(project: &Project, build: &Build, token: &str, image: &str) -> String {
+fn build_script(
+    project: &Project,
+    build: &Build,
+    token: &str,
+    image: &str,
+    env_b64: &str,
+) -> String {
     format!(
         r#"set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -447,14 +473,18 @@ echo "==> docker build ({dockerfile})"
 docker build -f "{dockerfile}" -t "{image}" .
 
 echo "==> starting container (host :8080 -> :{port})"
+# Project env vars (decoded silently — never echoed — so values stay out of the
+# build log). May be empty; docker accepts an empty --env-file.
+echo '{env_b64}' | base64 -d > /root/sb.env
 docker rm -f "{image}" >/dev/null 2>&1 || true
-docker run -d --name "{image}" --restart unless-stopped -p 8080:{port} "{image}"
+docker run -d --name "{image}" --restart unless-stopped --env-file /root/sb.env -p 8080:{port} "{image}"
 docker ps
 echo "{marker}"
 "#,
         build_id = build.id,
         sha = build.commit_sha,
         token = token,
+        env_b64 = env_b64,
         repo = project.repo_full_name,
         dockerfile = project.dockerfile_path,
         image = image,
@@ -554,13 +584,16 @@ fn parse_poll(output: &str) -> (String, Option<bool>, Option<i32>) {
     (rest.trim_end().to_string(), alive, exit)
 }
 
-/// Defense-in-depth: scrub the GitHub token from anything we persist.
-fn redact(s: &str, token: &str) -> String {
-    if token.is_empty() {
-        s.to_string()
-    } else {
-        s.replace(token, "***")
+/// Defense-in-depth: scrub known secrets (the GitHub token + every project env
+/// var value) from anything we persist or stream to the log panel.
+fn redact(s: &str, secrets: &[String]) -> String {
+    let mut out = s.to_string();
+    for secret in secrets {
+        if !secret.is_empty() {
+            out = out.replace(secret.as_str(), "***");
+        }
     }
+    out
 }
 
 async fn update_logs(db: &PgPool, id: Uuid, logs: &str) -> sqlx::Result<()> {

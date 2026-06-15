@@ -86,6 +86,20 @@ pub struct Build {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
+/// A per-project environment variable, injected into the deployed container.
+/// The `value` is returned to the owning user (reveal in the UI) but redacted
+/// from build/runtime logs before they're persisted or served.
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct ProjectEnvVar {
+    pub id: Uuid,
+    #[serde(skip_serializing)]
+    pub project_id: Uuid,
+    pub key: String,
+    pub value: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct ApiKey {
     pub id: Uuid,

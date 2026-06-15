@@ -1,13 +1,18 @@
+use std::time::Duration;
+
 use axum::extract::{Path, State};
 use axum::Json;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::github;
-use crate::models::{Build, Project};
+use crate::models::{Build, Project, ProjectEnvVar};
 use crate::AppState;
+
+/// Max wall-clock for the on-demand `docker logs` exec against the live sprite.
+const RUNTIME_LOGS_TIMEOUT: Duration = Duration::from_secs(15);
 
 // ---------------------------------------------------------------------------
 // repos
@@ -171,11 +176,9 @@ pub async fn create_build(
     Ok(Json(build))
 }
 
-pub async fn get_build(
-    State(app): State<AppState>,
-    AuthUser(user): AuthUser,
-    Path(id): Path<Uuid>,
-) -> AppResult<Json<Build>> {
+/// Load a build and enforce ownership via its parent project. Shared by
+/// `get_build` and the runtime-logs handler.
+async fn load_owned_build(app: &AppState, user_id: Uuid, id: Uuid) -> AppResult<Build> {
     let build = sqlx::query_as::<_, Build>(
         r#"SELECT id, project_id, commit_sha, status, sprite_name, url, logs, error,
                   metadata, created_at, updated_at, started_at, finished_at
@@ -185,7 +188,158 @@ pub async fn get_build(
     .fetch_optional(&app.db)
     .await?
     .ok_or(AppError::NotFound)?;
-    // Ownership check via the parent project.
-    load_owned_project(&app, user.id, build.project_id).await?;
-    Ok(Json(build))
+    load_owned_project(app, user_id, build.project_id).await?;
+    Ok(build)
+}
+
+pub async fn get_build(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Build>> {
+    Ok(Json(load_owned_build(&app, user.id, id).await?))
+}
+
+// ---------------------------------------------------------------------------
+// environment variables
+// ---------------------------------------------------------------------------
+
+/// Valid env var name: starts with a letter or underscore, then letters/digits/
+/// underscores. Mirrors the client-side check.
+fn valid_env_key(k: &str) -> bool {
+    let mut chars = k.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+pub async fn list_env_vars(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Vec<ProjectEnvVar>>> {
+    load_owned_project(&app, user.id, id).await?;
+    let vars = sqlx::query_as::<_, ProjectEnvVar>(
+        r#"SELECT id, project_id, key, value, created_at, updated_at
+           FROM project_env_vars WHERE project_id = $1 ORDER BY key"#,
+    )
+    .bind(id)
+    .fetch_all(&app.db)
+    .await?;
+    Ok(Json(vars))
+}
+
+#[derive(Deserialize)]
+pub struct UpsertEnvVarBody {
+    pub key: String,
+    pub value: String,
+}
+
+pub async fn upsert_env_var(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpsertEnvVarBody>,
+) -> AppResult<Json<ProjectEnvVar>> {
+    load_owned_project(&app, user.id, id).await?;
+    let key = body.key.trim().to_string();
+    if !valid_env_key(&key) {
+        return Err(AppError::bad_request(
+            "invalid env var name (use letters, digits, underscores; must not start with a digit)",
+        ));
+    }
+    let var = sqlx::query_as::<_, ProjectEnvVar>(
+        r#"INSERT INTO project_env_vars (project_id, key, value)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (project_id, key)
+           DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+           RETURNING id, project_id, key, value, created_at, updated_at"#,
+    )
+    .bind(id)
+    .bind(key)
+    .bind(body.value)
+    .fetch_one(&app.db)
+    .await?;
+    Ok(Json(var))
+}
+
+pub async fn delete_env_var(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path((id, key)): Path<(Uuid, String)>,
+) -> AppResult<Json<serde_json::Value>> {
+    load_owned_project(&app, user.id, id).await?;
+    sqlx::query("DELETE FROM project_env_vars WHERE project_id = $1 AND key = $2")
+        .bind(id)
+        .bind(key)
+        .execute(&app.db)
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ---------------------------------------------------------------------------
+// runtime logs (on-demand `docker logs` from the live sprite)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+pub struct RuntimeLogs {
+    pub available: bool,
+    pub logs: String,
+    pub message: Option<String>,
+}
+
+fn runtime_unavailable(message: impl Into<String>) -> Json<RuntimeLogs> {
+    Json(RuntimeLogs {
+        available: false,
+        logs: String::new(),
+        message: Some(message.into()),
+    })
+}
+
+/// Fetch the running container's logs on demand by exec'ing `docker logs` on the
+/// build's sprite. No storage — always fresh, and only works while the sprite is
+/// alive (which is exactly the "current deployment" model). Env var values are
+/// scrubbed before returning (ADR-0013).
+pub async fn runtime_logs(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<RuntimeLogs>> {
+    let build = load_owned_build(&app, user.id, id).await?;
+    let sprite = match &build.sprite_name {
+        Some(s) => s.clone(),
+        None => return Ok(runtime_unavailable("no deployment yet")),
+    };
+
+    // The container is named after the sprite (see worker `build_script`).
+    let cmd = format!("sudo docker logs --tail 2000 {sprite} 2>&1");
+    let output = match tokio::time::timeout(RUNTIME_LOGS_TIMEOUT, app.sprites.exec(&sprite, &cmd))
+        .await
+    {
+        Ok(Ok(res)) => res.output,
+        Ok(Err(e)) => return Ok(runtime_unavailable(format!("could not reach deployment: {e}"))),
+        Err(_) => return Ok(runtime_unavailable("timed out fetching runtime logs")),
+    };
+
+    // Scrub env var values so secrets the app echoes don't leak into the panel.
+    let secrets: Vec<(String,)> =
+        sqlx::query_as("SELECT value FROM project_env_vars WHERE project_id = $1")
+            .bind(build.project_id)
+            .fetch_all(&app.db)
+            .await
+            .unwrap_or_default();
+    let mut logs = output;
+    for (value,) in &secrets {
+        if !value.is_empty() {
+            logs = logs.replace(value.as_str(), "***");
+        }
+    }
+
+    Ok(Json(RuntimeLogs {
+        available: true,
+        logs,
+        message: None,
+    }))
 }
