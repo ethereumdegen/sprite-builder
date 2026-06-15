@@ -161,7 +161,7 @@ async fn run_build(app: &AppState, build: Build) -> anyhow::Result<()> {
     .fetch_one(&app.db)
     .await?;
 
-    let sprite_name = format!("build-{}", &build.id.simple().to_string()[..12]);
+    let sprite_name = generate_sprite_name(&app.db, build.id).await?;
     sqlx::query("UPDATE builds SET sprite_name = $1, updated_at = now() WHERE id = $2")
         .bind(&sprite_name)
         .bind(build.id)
@@ -410,6 +410,45 @@ echo "{marker}"
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+/// How many friendly names to try before falling back to a guaranteed-unique one.
+const MAX_NAME_ATTEMPTS: u32 = 8;
+
+/// Generate a friendly, DNS-safe, unique sprite name for a build.
+///
+/// The sprite name *is* the public subdomain (`https://<name>-<org>.sprites.dev/`),
+/// so instead of `build-<id>` we use the `names` crate's random adjective-noun
+/// pairs (e.g. `selfish-change`) — lowercase + hyphen, which is both a valid DNS
+/// label and a valid Docker image tag / container name (used verbatim in
+/// `build_script`). We retry on the rare collision with an existing build's
+/// sprite name; the final fallback appends a slice of the build id so this can
+/// never fail to produce a unique name.
+async fn generate_sprite_name(db: &PgPool, build_id: Uuid) -> sqlx::Result<String> {
+    let mut generator = names::Generator::default();
+    for _ in 0..MAX_NAME_ATTEMPTS {
+        // `Generator::next` only yields `None` if its word lists are empty, which
+        // the bundled defaults never are; fall back defensively rather than panic.
+        let Some(candidate) = generator.next() else { break };
+        if !sprite_name_taken(db, &candidate).await? {
+            return Ok(candidate);
+        }
+    }
+    // Guaranteed-unique fallback: a friendly pair plus a build-id suffix.
+    let suffix = &build_id.simple().to_string()[..4];
+    let base = names::Generator::default()
+        .next()
+        .unwrap_or_else(|| "build".to_string());
+    Ok(format!("{base}-{suffix}"))
+}
+
+/// Whether any build already uses this sprite name (live or historical).
+async fn sprite_name_taken(db: &PgPool, name: &str) -> sqlx::Result<bool> {
+    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM builds WHERE sprite_name = $1 LIMIT 1")
+        .bind(name)
+        .fetch_optional(db)
+        .await?;
+    Ok(row.is_some())
+}
 
 /// Run a command and require an HTTP-success response. Bounded by EXEC_TIMEOUT
 /// so a hung setup exec fails the build fast instead of riding the 900s HTTP cap.
