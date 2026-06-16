@@ -1,0 +1,19 @@
+{
+  "name": "sprite-builder-cli",
+  "version": "0.1.0",
+  "description": "Command-line client for the sprite-builder deploy service",
+  "bin": {
+    "sprite-builder": "bin/cli.js",
+    "sb": "bin/cli.js"
+  },
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md"
+  ],
+  "license": "MIT"
+}

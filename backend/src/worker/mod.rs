@@ -1,3 +1,5 @@
+pub mod codespaces;
+
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -62,6 +64,9 @@ const STALE_MINUTES: i32 = 30;
 /// worker process (see `src/worker/main.rs`).
 pub async fn run(app: AppState) -> anyhow::Result<()> {
     spawn_reaper(app.db.clone());
+    // Codespace provisioning runs in its own loop in the same process, fully
+    // decoupled from the build queue.
+    codespaces::spawn(app.clone());
 
     let poll = Duration::from_secs(app.config.worker_poll_secs.max(1));
     tracing::info!("build worker started (poll every {:?})", poll);

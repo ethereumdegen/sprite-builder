@@ -86,6 +86,57 @@ export interface UrlVisibility {
   message: string | null;
 }
 
+// --- codespaces (ephemeral coding filesystem) ---
+
+export type CodespaceStatus = "queued" | "provisioning" | "ready" | "stopped" | "failed";
+
+export interface Codespace {
+  id: string;
+  project_id: string;
+  name: string;
+  branch: string;
+  status: CodespaceStatus;
+  sprite_name: string | null;
+  url: string | null;
+  snapshot_key: string | null;
+  logs: string;
+  error: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface FileEntry {
+  name: string;
+  is_dir: boolean;
+}
+
+// A read of a workspace path: a directory listing (`entries`) or a file. Text
+// files arrive decoded in `content`; binary files arrive base64 with `binary`.
+export interface ReadResult {
+  kind: "dir" | "file";
+  path: string;
+  entries: FileEntry[] | null;
+  content: string | null;
+  binary: boolean;
+  truncated: boolean;
+  size: number;
+}
+
+export interface ExecResponse {
+  output: string;
+  exit_code: number;
+}
+
+export interface GitResponse {
+  op: string;
+  output: string;
+  exit_code: number;
+  ok: boolean;
+}
+
 // --- admin dashboard ---
 
 export interface AdminStats {
@@ -210,6 +261,39 @@ export const api = {
   deleteEnvVar: (projectId: string, key: string) =>
     req<{ ok: boolean }>(`/api/projects/${projectId}/env/${encodeURIComponent(key)}`, {
       method: "DELETE",
+    }),
+
+  // codespaces (ephemeral coding filesystem)
+  codespaces: (projectId: string) =>
+    req<Codespace[]>(`/api/projects/${projectId}/codespaces`),
+  codespace: (id: string) => req<Codespace>(`/api/codespaces/${id}`),
+  createCodespace: (projectId: string, name?: string) =>
+    req<Codespace>(`/api/projects/${projectId}/codespaces`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  deleteCodespace: (id: string) =>
+    req<{ ok: boolean }>(`/api/codespaces/${id}`, { method: "DELETE" }),
+  csRead: (id: string, path: string) =>
+    req<ReadResult>(`/api/codespaces/${id}/files?path=${encodeURIComponent(path)}`),
+  csWrite: (id: string, path: string, content: string) =>
+    req<{ ok: boolean; path: string }>(`/api/codespaces/${id}/files`, {
+      method: "PUT",
+      body: JSON.stringify({ path, content }),
+    }),
+  csDeletePath: (id: string, path: string) =>
+    req<{ ok: boolean }>(`/api/codespaces/${id}/files?path=${encodeURIComponent(path)}`, {
+      method: "DELETE",
+    }),
+  csExec: (id: string, cmd: string) =>
+    req<ExecResponse>(`/api/codespaces/${id}/exec`, {
+      method: "POST",
+      body: JSON.stringify({ cmd }),
+    }),
+  csGit: (id: string, op: "status" | "diff" | "commit" | "push" | "pull", message?: string) =>
+    req<GitResponse>(`/api/codespaces/${id}/git`, {
+      method: "POST",
+      body: JSON.stringify({ op, message }),
     }),
 
   keys: () => req<ApiKey[]>("/api/keys"),

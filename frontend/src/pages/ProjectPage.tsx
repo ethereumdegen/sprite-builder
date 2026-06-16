@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, Project } from "../api";
 import { useBuilds } from "../stores/builds";
+import { useCodespaces } from "../stores/codespaces";
 import { buildDuration, isActive } from "../components/build";
 import { VariablesEditor } from "../components/variables";
 
@@ -100,6 +101,8 @@ export default function ProjectPage() {
 
       <VariablesEditor projectId={project.id} />
 
+      <CodespacesSection projectId={project.id} branch={project.default_branch} />
+
       <h3>Builds</h3>
       {builds.length === 0 ? (
         <p className="muted">No builds yet.</p>
@@ -128,6 +131,90 @@ export default function ProjectPage() {
             </div>
           ))}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// codespaces section
+// ---------------------------------------------------------------------------
+
+/// Ephemeral coding filesystems for the project: create one (clones the default
+/// branch into a sprite) and jump into its editor. Polls while any is still
+/// provisioning.
+function CodespacesSection({ projectId, branch }: { projectId: string; branch: string }) {
+  const byProject = useCodespaces((s) => s.byProject);
+  const loadForProject = useCodespaces((s) => s.loadForProject);
+  const createCodespace = useCodespaces((s) => s.create);
+  const codespaces = useMemo(() => byProject[projectId] || [], [projectId, byProject]);
+
+  const navigate = useNavigate();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    loadForProject(projectId).catch(() => {});
+  }, [projectId, loadForProject]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // Poll while any codespace is still provisioning.
+  useEffect(() => {
+    const pending = codespaces.some((c) => c.status === "queued" || c.status === "provisioning");
+    if (!pending) return;
+    const t = setInterval(refresh, 2000);
+    return () => clearInterval(t);
+  }, [codespaces, refresh]);
+
+  const create = async () => {
+    setCreating(true);
+    setError(null);
+    try {
+      const cs = await createCodespace(projectId);
+      navigate(`/codespaces/${cs.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h3 style={{ marginTop: 0, marginBottom: 4 }}>Codespaces</h3>
+        <button onClick={create} disabled={creating} style={{ whiteSpace: "nowrap" }}>
+          {creating ? "Creating…" : "New codespace"}
+        </button>
+      </div>
+      <p className="muted">
+        An ephemeral coding filesystem — clones <b>{branch}</b> into a live sandbox you can edit,
+        commit, and push back to GitHub.
+      </p>
+      {error && <p style={{ color: "var(--red)" }}>{error}</p>}
+      {codespaces.length === 0 ? (
+        <p className="muted">No codespaces yet.</p>
+      ) : (
+        codespaces.map((c) => (
+          <div className="list-item" key={c.id}>
+            <div>
+              <span className={"badge " + c.status}>{c.status}</span>{" "}
+              {(c.status === "queued" || c.status === "provisioning") && (
+                <span className="spin">⟳</span>
+              )}{" "}
+              <span className="mono">{c.name}</span>
+              <div className="muted">
+                {c.branch} · {new Date(c.created_at).toLocaleString()}
+              </div>
+            </div>
+            <Link className="secondary" to={`/codespaces/${c.id}`}>
+              Open
+            </Link>
+          </div>
+        ))
       )}
     </div>
   );

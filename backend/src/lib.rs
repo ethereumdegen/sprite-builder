@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod auth;
 pub mod authz;
+pub mod codespaces;
 pub mod config;
 pub mod error;
 pub mod github;
@@ -89,6 +90,7 @@ pub fn build_router(state: AppState) -> Router {
         .allow_methods([
             Method::GET,
             Method::POST,
+            Method::PUT,
             Method::DELETE,
             Method::PATCH,
             Method::OPTIONS,
@@ -127,6 +129,20 @@ pub fn build_router(state: AppState) -> Router {
             "/api/builds/:id/url-visibility",
             get(projects::get_url_visibility).post(projects::set_url_visibility),
         )
+        // codespaces (ephemeral coding filesystem) — decoupled from builds
+        .route(
+            "/api/projects/:id/codespaces",
+            get(codespaces::list_codespaces).post(codespaces::create_codespace),
+        )
+        .route("/api/codespaces/:id", get(codespaces::get_codespace).delete(codespaces::delete_codespace))
+        .route(
+            "/api/codespaces/:id/files",
+            get(codespaces::read_path)
+                .put(codespaces::write_file)
+                .delete(codespaces::delete_path),
+        )
+        .route("/api/codespaces/:id/exec", post(codespaces::exec))
+        .route("/api/codespaces/:id/git", post(codespaces::git))
         // admin dashboard (capability-gated by the AdminUser extractor)
         .route("/api/admin/stats", get(admin::stats))
         .route("/api/admin/builds", get(admin::builds))

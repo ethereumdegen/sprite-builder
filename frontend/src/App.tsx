@@ -6,6 +6,7 @@ import Login from "./pages/Login";
 import ProjectsPage from "./pages/ProjectsPage";
 import ProjectPage from "./pages/ProjectPage";
 import BuildPage from "./pages/BuildPage";
+import CodespacePage from "./pages/CodespacePage";
 import ApiKeysPage from "./pages/ApiKeysPage";
 import DocsPage from "./pages/DocsPage";
 import AdminPage from "./pages/AdminPage";
@@ -33,6 +34,7 @@ export default function App() {
           <Route path="/" element={<ProjectsPage />} />
           <Route path="/projects/:id" element={<ProjectPage />} />
           <Route path="/builds/:id" element={<BuildPage />} />
+          <Route path="/codespaces/:id" element={<CodespacePage />} />
           <Route path="/keys" element={<ApiKeysPage />} />
           <Route path="/docs" element={<DocsPage />} />
           <Route path="/admin" element={<AdminRoute />} />

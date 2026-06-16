@@ -102,6 +102,9 @@ label { display: block; margin: 10px 0 4px; color: var(--muted); font-size: 13px
 .badge.running { background: rgba(210,153,34,0.15); color: var(--yellow); }
 .badge.succeeded { background: rgba(63,185,80,0.15); color: var(--green); }
 .badge.failed { background: rgba(248,81,73,0.15); color: var(--red); }
+.badge.provisioning { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.badge.ready { background: rgba(63,185,80,0.15); color: var(--green); }
+.badge.stopped { background: #1f2937; color: var(--muted); }
 
 .list-item {
   display: flex;

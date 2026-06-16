@@ -45,9 +45,12 @@ sprite-builder/
 │   │   ├── github.rs         # GitHub REST client
 │   │   ├── sprites.rs        # sprites.dev REST client
 │   │   ├── projects.rs       # projects / repos / builds routes
+│   │   ├── codespaces.rs     # codespaces subapp: files / exec / git (live sprite)
+│   │   ├── worker/
+│   │   │   └── codespaces.rs # codespace provisioning loop (clone into a sprite)
 │   │   ├── models.rs         # DB models
 │   │   ├── config.rs · error.rs
-│   │   └── migrations/       # 0001_init.sql, 0002_roles.sql
+│   │   └── migrations/       # 0001_init.sql … 0004_codespaces.sql
 │   ├── .sqlx/               # committed offline query cache (ADR 0002)
 │   ├── clippy.toml · deny.toml  # lint/dependency enforcement
 ├── frontend/                 # React + Vite SPA
@@ -203,6 +206,11 @@ curl -H "Authorization: Bearer $KEY" $BASE/api/builds/<build-id>
 | GET    | `/api/projects/:id`               | get a project                        |
 | GET/POST | `/api/projects/:id/builds`      | list / trigger builds                |
 | GET    | `/api/builds/:id`                 | build status, logs, url, metadata    |
+| GET/POST | `/api/projects/:id/codespaces`  | list / create codespaces             |
+| GET/DELETE | `/api/codespaces/:id`           | codespace status / destroy           |
+| GET/PUT/DELETE | `/api/codespaces/:id/files`  | read-or-list / write / delete a path |
+| POST   | `/api/codespaces/:id/exec`        | run a bash command in the workspace  |
+| POST   | `/api/codespaces/:id/git`         | `{op: status\|diff\|commit\|push\|pull}` |
 | GET/POST | `/api/keys`                     | list / create API keys              |
 | DELETE | `/api/keys/:id`                   | revoke an API key                    |
 | GET    | `/api/admin/stats`                | **admin** — app-wide counts          |
@@ -237,6 +245,55 @@ Two more safety nets: a **reaper** fails builds stuck in `running` for too long
 **sprites.dev proxies external traffic to port `8080` inside the VM**, so the
 worker maps the container's port to host `8080`. Set a project's `container_port`
 to whatever your app listens on (default `8080`).
+
+## Codespaces (ephemeral coding filesystem)
+
+A **Codespace** is a separate subapp — think GitHub Codespaces, or a worktree +
+git living in a sandbox. It's decoupled from the build system: builds turn a repo
+into a running image; a codespace gives you a *live, editable working tree* you
+(or an agent) can read, write, run commands in, and push back to GitHub.
+
+```
+project ──▶ create Codespace ──▶ [worker] create sprite + git clone into /workspace/app ──▶ ready
+                                                  │
+   interactive, synchronous (against the live sprite via the exec API):
+   ├─ list/read/write/delete files under /workspace/app   (path-jailed)
+   ├─ run arbitrary bash                                   ("as if local")
+   └─ git status / diff / commit / push / pull             (token via credential helper)
+```
+
+- **Provisioning** is asynchronous, on the same Postgres queue discipline as
+  builds (`FOR UPDATE SKIP LOCKED`) but in its **own worker loop**
+  (`worker/codespaces.rs`) — independent of the build queue. It creates a sprite,
+  clones the project's **default branch** into `/workspace/app` with the owner's
+  GitHub token (via a git credential helper, never in the clone URL), sets the
+  commit identity (`<github_login>` / `<login>@users.noreply.github.com`), and
+  marks the codespace `ready`. Lifecycle: `queued → provisioning → ready | failed`.
+- **Files / exec / git** run **synchronously** against the live sprite from the
+  API server (the same bounded-exec pattern as build runtime logs). Everything the
+  caller sends — paths, file contents, the exec command, commit messages, the
+  token — is **base64-encoded and decoded inside the sprite**, so nothing can
+  break out of its shell variable. Filesystem ops are **jailed** under
+  `/workspace/app` (rejected client-side, then re-checked in-sprite with
+  `realpath` to defeat symlink escapes), and project secrets are redacted from
+  returned output.
+- The **sprite stays alive** as the codespace's filesystem (v1). There is no
+  hibernation yet — see *Roadmap* below.
+
+The `exec` endpoint is fully live but has no terminal box in the v1 UI (it's
+API-only, for agents/scripts); the web UI exposes the file browser/editor and the
+commit/push panel.
+
+### Roadmap (not built yet)
+
+- **Phase 2 — hibernation.** Snapshot `/workspace` to S3/DigitalOcean Spaces on
+  *stop* and restore it onto a fresh sprite on *start*, so idle codespaces cost
+  nothing. The `codespaces.snapshot_key` column and the `stopped` status are
+  reserved for this.
+- **Phase 3 — codespace as a git remote.** Run `git http-backend` inside the
+  sprite so you can push/pull to the codespace *itself*, not just GitHub.
+- **Phase 4 — build off a codespace.** Let a build target a codespace's working
+  tree instead of a fresh clone.
 
 ## Build target repos
 

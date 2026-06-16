@@ -86,6 +86,29 @@ pub struct Build {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
+/// A Codespace: a long-lived sprite holding a git working tree for a project
+/// (`/workspace/app`). Interactive file/bash/git ops run against the live sprite;
+/// provisioning (sprite create + clone) is handled asynchronously by the worker.
+/// Project-scoped; ownership is reached through the parent project (ADR 0003).
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct Codespace {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub name: String,
+    pub branch: String,
+    pub status: String,
+    pub sprite_name: Option<String>,
+    pub url: Option<String>,
+    pub snapshot_key: Option<String>,
+    pub logs: String,
+    pub error: Option<String>,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
 /// A per-project environment variable, injected into the deployed container.
 /// The `value` is returned to the owning user (reveal in the UI) but redacted
 /// from build/runtime logs before they're persisted or served.

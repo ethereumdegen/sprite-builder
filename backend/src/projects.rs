@@ -88,7 +88,11 @@ pub async fn create_project(
     Ok(Json(project))
 }
 
-async fn load_owned_project(app: &AppState, user_id: Uuid, id: Uuid) -> AppResult<Project> {
+pub(crate) async fn load_owned_project(
+    app: &AppState,
+    user_id: Uuid,
+    id: Uuid,
+) -> AppResult<Project> {
     let project = sqlx::query_as::<_, Project>(
         r#"SELECT id, user_id, name, repo_full_name, repo_id, default_branch,
                   dockerfile_path, container_port, created_at
