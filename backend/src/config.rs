@@ -31,6 +31,15 @@ pub struct Config {
     /// the first admin without touching the database. Promotes only — removing a
     /// login here never demotes an already-admin user.
     pub admin_github_logins: Vec<String>,
+
+    /// S3-compatible object storage backing Docuspaces (DigitalOcean Spaces, AWS
+    /// S3, MinIO, …). All five are optional; when unset the Docuspace endpoints
+    /// return a clean "S3 is not configured" 400 (`crate::storage::build_bucket`).
+    pub s3_endpoint: Option<String>,
+    pub s3_region: String,
+    pub s3_bucket: String,
+    pub s3_access_key: Option<String>,
+    pub s3_secret_key: Option<String>,
 }
 
 fn env(key: &str) -> anyhow::Result<String> {
@@ -104,6 +113,11 @@ impl Config {
             db_max_connections: env_parse("DB_MAX_CONNECTIONS", 10u32)?,
             static_dir: env_or("STATIC_DIR", ""),
             admin_github_logins: parse_admin_logins(&env_or("ADMIN_GITHUB_LOGINS", "")),
+            s3_endpoint: std::env::var("S3_ENDPOINT").ok(),
+            s3_region: env_or("S3_REGION", "us-east-1"),
+            s3_bucket: env_or("S3_BUCKET", "docuspaces"),
+            s3_access_key: std::env::var("S3_ACCESS_KEY").ok(),
+            s3_secret_key: std::env::var("S3_SECRET_KEY").ok(),
         })
     }
 

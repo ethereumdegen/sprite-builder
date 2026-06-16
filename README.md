@@ -48,9 +48,12 @@ sprite-builder/
 │   │   ├── codespaces.rs     # codespaces subapp: files / exec / git (live sprite)
 │   │   ├── worker/
 │   │   │   └── codespaces.rs # codespace provisioning loop (clone into a sprite)
+│   │   ├── docuspaces.rs     # docuspaces subapp: S3-backed file store (no sprite)
+│   │   ├── storage.rs        # S3-compatible object-storage helpers (rust-s3)
+│   │   ├── util.rs           # neutral helpers shared by the subapps (ADR 0017)
 │   │   ├── models.rs         # DB models
 │   │   ├── config.rs · error.rs
-│   │   └── migrations/       # 0001_init.sql … 0004_codespaces.sql
+│   │   └── migrations/       # 0001_init.sql … 0005_docuspaces.sql
 │   ├── .sqlx/               # committed offline query cache (ADR 0002)
 │   ├── clippy.toml · deny.toml  # lint/dependency enforcement
 ├── frontend/                 # React + Vite SPA
@@ -162,6 +165,11 @@ optional `WORKER_POLL_SECS` / `DB_MAX_CONNECTIONS`) — it does **not** need
 | `DB_MAX_CONNECTIONS`   |          | `10`                         | server, worker     | Postgres pool size per process.                                             |
 | `ADMIN_GITHUB_LOGINS`  |          | _(empty)_                    | server             | Comma-separated GitHub logins auto-promoted to `admin` on login (promote-only). |
 | `STATIC_DIR`           |          | _(empty)_                    | server             | Dir of built SPA assets to serve. Empty in dev (Vite serves it); set to `/app/static` in the Docker image. |
+| `S3_ENDPOINT`          |          | _(empty)_                    | server             | S3-compatible endpoint for Docuspaces (e.g. `https://nyc3.digitaloceanspaces.com`). Unset = Docuspace file ops return a clean "S3 is not configured" 400. |
+| `S3_REGION`            |          | `us-east-1`                  | server             | S3 region (Spaces uses the datacenter slug, e.g. `nyc3`).                    |
+| `S3_BUCKET`            |          | `docuspaces`                 | server             | Bucket/Space that holds all docuspace files (keys are `docuspaces/<id>/…`).  |
+| `S3_ACCESS_KEY`        |          | _(empty)_                    | server             | S3 access key id (required for Docuspaces).                                  |
+| `S3_SECRET_KEY`        |          | _(empty)_                    | server             | S3 secret access key (required for Docuspaces).                             |
 
 > `WORKER_POLL_SECS` and `DB_MAX_CONNECTIONS` fail fast on a malformed value
 > rather than silently falling back to the default (ADR 0005).
@@ -212,6 +220,10 @@ curl -H "Authorization: Bearer $KEY" $BASE/api/builds/<build-id>
 | GET/PUT/DELETE | `/api/codespaces/:id/files`  | read-or-list / write / delete a path |
 | POST   | `/api/codespaces/:id/exec`        | run a bash command in the workspace  |
 | POST   | `/api/codespaces/:id/git`         | `{op: status\|diff\|commit\|push\|pull}` |
+| GET/POST | `/api/projects/:id/docuspaces`  | list / create docuspaces             |
+| GET/PATCH/DELETE | `/api/docuspaces/:id`     | get / rename (`{name}`) / destroy    |
+| GET/PUT/DELETE | `/api/docuspaces/:id/files`  | read-or-list / write / delete a path |
+| POST   | `/api/docuspaces/:id/folders`     | create an empty folder (`{path}`)    |
 | GET/POST | `/api/keys`                     | list / create API keys              |
 | DELETE | `/api/keys/:id`                   | revoke an API key                    |
 | GET    | `/api/admin/stats`                | **admin** — app-wide counts          |
@@ -313,6 +325,72 @@ commit/push panel.
   sprite so you can push/pull to the codespace *itself*, not just GitHub.
 - **Phase 4 — build off a codespace.** Let a build target a codespace's working
   tree instead of a fresh clone.
+
+## Docuspaces (S3-backed file store)
+
+A **Docuspace** is the third subapp: a project-scoped store for documents (usually
+markdown), backed directly by **S3-compatible object storage** — **no sprite and
+no worker**. Where a codespace gives you a live filesystem on a VM, a docuspace
+gives you a simple read/write file API over a bucket, with a folder tree.
+
+```
+project ──▶ create Docuspace (instant, just a row)
+                 │
+                 ▼
+        S3 keys under  docuspaces/<id>/<path>
+        e.g.  docuspaces/3f9…/notes/readme.md
+```
+
+- **Storage model.** A docuspace is a Postgres row plus a key **prefix**
+  (`docuspaces/<id>/`) in the configured bucket. Files are plain objects; the
+  object key *is* the path. **Folders are implicit** — a folder exists when
+  something lives under it. `POST …/folders` writes a zero-byte `.keep` marker so
+  an otherwise-empty folder is still visible.
+- **Listing** uses an S3 `ListObjects` with a `/` delimiter, so reading a path
+  returns either a directory listing (sub-folders + files) or a file's bytes —
+  the same `kind: "dir" | "file"` shape codespaces uses. Text comes back decoded;
+  non-UTF-8 files come back base64 with `binary: true`.
+- **Writes proxy through the backend** (`put_object`, content-type inferred from
+  the extension), capped at **5 MiB** per file. Send binary by setting
+  `encoding: "base64"`.
+- **Auth & ownership.** Every endpoint is owned through the parent project
+  (ADR 0003) and gated by a session **or** a bearer API key — so the whole thing
+  is scriptable. Configure `S3_ENDPOINT` / `S3_REGION` / `S3_BUCKET` /
+  `S3_ACCESS_KEY` / `S3_SECRET_KEY`; without them the file ops return a clean
+  "S3 is not configured" 400 (the rest of the app still boots).
+- **Deleting** a docuspace drains every object under its prefix, then drops the
+  row. Deleting a path removes the file, or a folder and everything under it.
+
+```bash
+# create a docuspace in a project (random name unless you pass {"name": "..."})
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"name":"design-docs"}' $BASE/api/projects/<project-id>/docuspaces
+# → { "id": "<ds-id>", "name": "design-docs", ... }
+
+# write a markdown file (creates parent folders implicitly)
+curl -X PUT -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"path":"notes/readme.md","content":"# Hello\n\nfrom a docuspace"}' \
+  $BASE/api/docuspaces/<ds-id>/files
+
+# list the root (kind: "dir"), then read the file (kind: "file")
+curl -H "Authorization: Bearer $KEY" "$BASE/api/docuspaces/<ds-id>/files?path="
+curl -H "Authorization: Bearer $KEY" "$BASE/api/docuspaces/<ds-id>/files?path=notes/readme.md"
+
+# upload a binary (base64) and make an empty folder
+curl -X PUT -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"path":"img/logo.png","content":"iVBORw0KGgo...","encoding":"base64"}' \
+  $BASE/api/docuspaces/<ds-id>/files
+curl -X POST -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+  -d '{"path":"drafts"}' $BASE/api/docuspaces/<ds-id>/folders
+
+# delete a file (or a whole folder by passing its path)
+curl -X DELETE -H "Authorization: Bearer $KEY" \
+  "$BASE/api/docuspaces/<ds-id>/files?path=notes/readme.md"
+```
+
+The web UI (`/docuspaces/:id`) renders a recursive **folder tree** beside a
+**markdown viewer/editor** (toggle preview ⇄ edit; non-markdown opens in a plain
+editor; binaries offer a download).
 
 ## Build target repos
 

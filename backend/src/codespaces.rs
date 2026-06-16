@@ -27,6 +27,7 @@ use crate::auth::AuthUser;
 use crate::error::{AppError, AppResult};
 use crate::models::Codespace;
 use crate::projects::load_owned_project;
+use crate::util::{random_name, validate_rel_path};
 use crate::AppState;
 
 /// Where the repo is cloned inside the sprite (see the worker's clone script).
@@ -133,29 +134,6 @@ async fn run(app: &AppState, sprite: &str, script: &str, timeout: Duration) -> A
 // path jailing
 // ---------------------------------------------------------------------------
 
-/// Client-side validation of a caller-supplied relative path. The in-sprite
-/// `realpath` guard is the real backstop (it also defeats symlink escapes); this
-/// rejects the obvious cases early and keeps a tidy 400.
-fn validate_rel_path(path: &str, allow_root: bool) -> AppResult<String> {
-    let p = path.trim().trim_start_matches("./").to_string();
-    if p.is_empty() || p == "." {
-        if allow_root {
-            return Ok(String::new());
-        }
-        return Err(AppError::bad_request("a file path is required"));
-    }
-    if p.starts_with('/') || p.starts_with('~') {
-        return Err(AppError::bad_request("path must be relative to the workspace"));
-    }
-    if p.contains('\0') {
-        return Err(AppError::bad_request("invalid path"));
-    }
-    if p.split('/').any(|seg| seg == "..") {
-        return Err(AppError::bad_request("path may not traverse outside the workspace"));
-    }
-    Ok(p)
-}
-
 /// Bash snippet that resolves `$P` (already decoded) under WORKDIR into `$R` and
 /// aborts with an ERR marker if it escapes. Shared by every filesystem op.
 fn jail_prelude() -> String {
@@ -207,16 +185,6 @@ pub struct CreateCodespaceBody {
     /// Optional friendly name. Defaults to a random adjective-noun pair.
     #[serde(default)]
     pub name: Option<String>,
-}
-
-/// A random adjective-noun label (e.g. `selfish-change`) from the `names` crate —
-/// the same source as the sprite subdomain — used as a codespace's default name.
-/// Created and dropped in one expression so the non-Send generator never crosses
-/// an await.
-fn random_name() -> String {
-    names::Generator::default()
-        .next()
-        .unwrap_or_else(|| "codespace".to_string())
 }
 
 /// Create a codespace: insert a `queued` row the worker provisions. The branch is

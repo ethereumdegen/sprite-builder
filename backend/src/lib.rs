@@ -3,11 +3,14 @@ pub mod auth;
 pub mod authz;
 pub mod codespaces;
 pub mod config;
+pub mod docuspaces;
 pub mod error;
 pub mod github;
 pub mod models;
 pub mod projects;
 pub mod sprites;
+pub mod storage;
+pub mod util;
 pub mod worker;
 
 use std::path::Path;
@@ -149,6 +152,24 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/codespaces/:id/clone", post(codespaces::clone))
         .route("/api/codespaces/:id/exec", post(codespaces::exec))
         .route("/api/codespaces/:id/git", post(codespaces::git))
+        // docuspaces (S3-backed file store — no sprite/worker)
+        .route(
+            "/api/projects/:id/docuspaces",
+            get(docuspaces::list_docuspaces).post(docuspaces::create_docuspace),
+        )
+        .route(
+            "/api/docuspaces/:id",
+            get(docuspaces::get_docuspace)
+                .patch(docuspaces::rename_docuspace)
+                .delete(docuspaces::delete_docuspace),
+        )
+        .route(
+            "/api/docuspaces/:id/files",
+            get(docuspaces::read_path)
+                .put(docuspaces::write_file)
+                .delete(docuspaces::delete_path),
+        )
+        .route("/api/docuspaces/:id/folders", post(docuspaces::create_folder))
         // admin dashboard (capability-gated by the AdminUser extractor)
         .route("/api/admin/stats", get(admin::stats))
         .route("/api/admin/builds", get(admin::builds))

@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, Project } from "../api";
 import { useBuilds } from "../stores/builds";
 import { useCodespaces } from "../stores/codespaces";
+import { useDocuspaces } from "../stores/docuspaces";
 import { buildDuration, isActive } from "../components/build";
 import { VariablesEditor } from "../components/variables";
 
@@ -102,6 +103,8 @@ export default function ProjectPage() {
       <VariablesEditor projectId={project.id} />
 
       <CodespacesSection projectId={project.id} branch={project.default_branch} />
+
+      <DocuspacesSection projectId={project.id} />
 
       <h3>Builds</h3>
       {builds.length === 0 ? (
@@ -211,6 +214,72 @@ function CodespacesSection({ projectId, branch }: { projectId: string; branch: s
               </div>
             </div>
             <Link className="secondary" to={`/codespaces/${c.id}`}>
+              Open
+            </Link>
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// docuspaces section
+// ---------------------------------------------------------------------------
+
+/// S3-backed file stores for the project (usually markdown): create one and jump
+/// into its file tree / markdown editor. No sprite or provisioning — creation is
+/// instant.
+function DocuspacesSection({ projectId }: { projectId: string }) {
+  const byProject = useDocuspaces((s) => s.byProject);
+  const loadForProject = useDocuspaces((s) => s.loadForProject);
+  const createDocuspace = useDocuspaces((s) => s.create);
+  const docuspaces = useMemo(() => byProject[projectId] || [], [projectId, byProject]);
+
+  const navigate = useNavigate();
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadForProject(projectId).catch(() => {});
+  }, [projectId, loadForProject]);
+
+  const create = async () => {
+    setCreating(true);
+    setError(null);
+    try {
+      const ds = await createDocuspace(projectId);
+      navigate(`/docuspaces/${ds.id}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <h3 style={{ marginTop: 0, marginBottom: 4 }}>Docuspaces</h3>
+        <button onClick={create} disabled={creating} style={{ whiteSpace: "nowrap" }}>
+          {creating ? "Creating…" : "New docuspace"}
+        </button>
+      </div>
+      <p className="muted">
+        An S3-backed file store (usually markdown) with a folder tree — read, write, and organize
+        documents over a simple API. No sprite required.
+      </p>
+      {error && <p style={{ color: "var(--red)" }}>{error}</p>}
+      {docuspaces.length === 0 ? (
+        <p className="muted">No docuspaces yet.</p>
+      ) : (
+        docuspaces.map((d) => (
+          <div className="list-item" key={d.id}>
+            <div>
+              <span className="mono">{d.name}</span>
+              <div className="muted">{new Date(d.updated_at).toLocaleString()}</div>
+            </div>
+            <Link className="secondary" to={`/docuspaces/${d.id}`}>
               Open
             </Link>
           </div>

@@ -109,6 +109,20 @@ pub struct Codespace {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
+/// A Docuspace: an S3-backed file store (usually markdown) owned by a project.
+/// There is no sprite or worker — files live as plain objects under the key
+/// prefix `docuspaces/<id>/...`; this record is the only Postgres state.
+/// Project-scoped; ownership is reached through the parent project (ADR 0003).
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct Docuspace {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub name: String,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// A per-project environment variable, injected into the deployed container.
 /// The `value` is returned to the owning user (reveal in the UI) but redacted
 /// from build/runtime logs before they're persisted or served.

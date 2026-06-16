@@ -295,3 +295,20 @@ pre.code {
   color: #c9d1d9;
   white-space: pre;
 }
+
+/* Markdown render container (Docuspace viewer). Minimal, readable defaults — the
+   rest inherits the app's dark theme. */
+.md-body { line-height: 1.6; overflow-wrap: anywhere; }
+.md-body h1, .md-body h2, .md-body h3 { margin: 0.8em 0 0.4em; line-height: 1.25; }
+.md-body h1 { font-size: 1.6em; border-bottom: 1px solid var(--border, #30363d); padding-bottom: 0.2em; }
+.md-body h2 { font-size: 1.3em; border-bottom: 1px solid var(--border, #30363d); padding-bottom: 0.2em; }
+.md-body p, .md-body ul, .md-body ol, .md-body blockquote, .md-body table { margin: 0.5em 0; }
+.md-body ul, .md-body ol { padding-left: 1.4em; }
+.md-body code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: rgba(127,127,127,0.15); padding: 0.1em 0.35em; border-radius: 4px; }
+.md-body pre { background: rgba(127,127,127,0.12); padding: 12px; border-radius: 6px; overflow: auto; }
+.md-body pre code { background: none; padding: 0; }
+.md-body blockquote { border-left: 3px solid var(--border, #30363d); padding-left: 0.8em; color: var(--muted, #8b949e); }
+.md-body table { border-collapse: collapse; }
+.md-body th, .md-body td { border: 1px solid var(--border, #30363d); padding: 4px 8px; }
+.md-body a { color: var(--blue, #58a6ff); }
+.md-body img { max-width: 100%; }

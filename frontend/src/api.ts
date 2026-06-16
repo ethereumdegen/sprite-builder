@@ -130,6 +130,34 @@ export interface ExecResponse {
   exit_code: number;
 }
 
+// --- docuspaces (S3-backed file store; no sprite/worker) ---
+
+export interface Docuspace {
+  id: string;
+  project_id: string;
+  name: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DocEntry {
+  name: string;
+  is_dir: boolean;
+  size: number;
+}
+
+// A read of a docuspace path: a directory listing (`entries`) or a file. Text
+// files arrive decoded in `content`; non-UTF-8 files arrive base64 with `binary`.
+export interface DocReadResult {
+  kind: "dir" | "file";
+  path: string;
+  entries: DocEntry[] | null;
+  content: string | null;
+  binary: boolean;
+  size: number;
+}
+
 export interface GitResponse {
   op: string;
   output: string;
@@ -304,6 +332,39 @@ export const api = {
     req<GitResponse>(`/api/codespaces/${id}/git`, {
       method: "POST",
       body: JSON.stringify({ op, message }),
+    }),
+
+  // docuspaces (S3-backed file store)
+  docuspaces: (projectId: string) =>
+    req<Docuspace[]>(`/api/projects/${projectId}/docuspaces`),
+  docuspace: (id: string) => req<Docuspace>(`/api/docuspaces/${id}`),
+  createDocuspace: (projectId: string, name?: string) =>
+    req<Docuspace>(`/api/projects/${projectId}/docuspaces`, {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  renameDocuspace: (id: string, name: string) =>
+    req<Docuspace>(`/api/docuspaces/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+  deleteDocuspace: (id: string) =>
+    req<{ ok: boolean }>(`/api/docuspaces/${id}`, { method: "DELETE" }),
+  dsRead: (id: string, path: string) =>
+    req<DocReadResult>(`/api/docuspaces/${id}/files?path=${encodeURIComponent(path)}`),
+  dsWrite: (id: string, path: string, content: string, encoding?: "utf8" | "base64") =>
+    req<{ ok: boolean; path: string }>(`/api/docuspaces/${id}/files`, {
+      method: "PUT",
+      body: JSON.stringify({ path, content, encoding }),
+    }),
+  dsDeletePath: (id: string, path: string) =>
+    req<{ ok: boolean }>(`/api/docuspaces/${id}/files?path=${encodeURIComponent(path)}`, {
+      method: "DELETE",
+    }),
+  dsMkdir: (id: string, path: string) =>
+    req<{ ok: boolean; path: string }>(`/api/docuspaces/${id}/folders`, {
+      method: "POST",
+      body: JSON.stringify({ path }),
     }),
 
   keys: () => req<ApiKey[]>("/api/keys"),
