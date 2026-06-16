@@ -271,6 +271,7 @@ button.secondary.selected { border-color: var(--accent, #2f81f7); color: var(--t
 .method.post { background: rgba(63,185,80,0.15); color: var(--green); }
 .method.delete { background: rgba(248,81,73,0.15); color: var(--red); }
 .method.patch { background: rgba(210,153,34,0.15); color: var(--yellow); }
+.method.put { background: rgba(163,113,247,0.15); color: #a371f7; }
 
 .codewrap { position: relative; }
 .codewrap .copybtn {

@@ -27,7 +27,7 @@ function Code({ children }: { children: string }) {
   );
 }
 
-function Method({ m }: { m: "GET" | "POST" | "DELETE" | "PATCH" }) {
+function Method({ m }: { m: "GET" | "POST" | "PUT" | "DELETE" | "PATCH" }) {
   return <span className={`method ${m.toLowerCase()}`}>{m}</span>;
 }
 
@@ -52,6 +52,7 @@ export default function DocsPage() {
         <a href="#projects">Projects</a>
         <a href="#builds">Builds</a>
         <a href="#build-object">The build object</a>
+        <a href="#codespaces">Codespaces</a>
         <a href="#admin">Admin</a>
         <a href="#errors">Errors</a>
       </div>
@@ -440,6 +441,150 @@ done`}</Code>
           </tr>
         </tbody>
       </table>
+
+      {/* ------------------------------------------------------------------ */}
+      <h3 id="codespaces">Codespaces</h3>
+      <p>
+        A <strong>codespace</strong> is an ephemeral coding filesystem — a live
+        git working tree in a sandbox that you (or an agent) can read, write, run
+        bash in, and push back to GitHub. Unlike a build (which turns a repo into
+        a running image), a codespace stays editable. Same auth as everything
+        else: send your <code>Authorization: Bearer sb_…</code> key. The actions
+        below are exactly what an agent needs to operate on a repo "as if on a
+        local machine."
+      </p>
+      <p>
+        Statuses:{" "}
+        <span className="badge queued">queued</span>{" "}
+        <span className="badge provisioning">provisioning</span>{" "}
+        <span className="badge ready">ready</span>{" "}
+        <span className="badge failed">failed</span>. Files live under the
+        workspace root; paths are <strong>relative and jailed</strong> (no{" "}
+        <code>..</code> or absolute paths), text files round-trip as plain{" "}
+        <code>content</code> (binary comes back base64), the write cap is 1&nbsp;MiB,
+        and project secrets are redacted from any returned output.
+      </p>
+
+      <h4>
+        <Method m="POST" /> <span className="mono">/api/projects/:id/codespaces</span>
+      </h4>
+      <p>
+        Create a codespace. The body is optional — <code>name</code> defaults to a
+        random <code>adjective-noun</code> label. It provisions asynchronously
+        (creates a sprite, clones the project's default branch), so poll until{" "}
+        <code>status</code> is <code>ready</code>.
+      </p>
+      <Code>{`CS_ID=$(curl -s "$SB_URL/api/projects/$PROJECT_ID/codespaces" \\
+  -H "Authorization: Bearer $SB_KEY" -X POST | jq -r .id)
+
+# poll until the clone finishes
+while :; do
+  S=$(curl -s "$SB_URL/api/codespaces/$CS_ID" \\
+        -H "Authorization: Bearer $SB_KEY" | jq -r .status)
+  echo "status: $S"
+  case "$S" in
+    ready)  echo "ready"; break ;;
+    failed) echo "provisioning failed"; break ;;
+  esac
+  sleep 3
+done`}</Code>
+
+      <h4>
+        <Method m="GET" /> <span className="mono">/api/codespaces/:id</span>
+      </h4>
+      <p>
+        Fetch a codespace: <code>status</code>, <code>branch</code>,{" "}
+        <code>sprite_name</code>, provisioning <code>logs</code>, and{" "}
+        <code>error</code> on failure.
+      </p>
+
+      <h4>
+        <Method m="GET" /> <span className="mono">/api/codespaces/:id/files?path=…</span>
+      </h4>
+      <p>
+        Read a file or list a directory. Omit <code>path</code> (or pass an empty
+        one) for the workspace root. The response is{" "}
+        <code>{`{ kind, path, entries, content, binary, truncated, size }`}</code>:
+        a directory returns <code>entries</code> (
+        <code>{`[{ name, is_dir }]`}</code>); a text file returns decoded{" "}
+        <code>content</code>.
+      </p>
+      <Code>{`# list the workspace root
+curl -s "$SB_URL/api/codespaces/$CS_ID/files" \\
+  -H "Authorization: Bearer $SB_KEY" | jq '.entries'
+
+# read a file
+curl -s "$SB_URL/api/codespaces/$CS_ID/files?path=README.md" \\
+  -H "Authorization: Bearer $SB_KEY" | jq -r .content`}</Code>
+
+      <h4>
+        <Method m="PUT" /> <span className="mono">/api/codespaces/:id/files</span>
+      </h4>
+      <p>
+        Write a file (creating parent directories). Body:{" "}
+        <code>{`{ "path": "...", "content": "..." }`}</code> — <code>content</code>{" "}
+        is plain text, up to 1&nbsp;MiB.
+      </p>
+      <Code>{`curl -s "$SB_URL/api/codespaces/$CS_ID/files" \\
+  -H "Authorization: Bearer $SB_KEY" \\
+  -H "Content-Type: application/json" -X PUT \\
+  -d '{"path":"src/hello.txt","content":"hi from the api\\n"}'`}</Code>
+
+      <h4>
+        <Method m="DELETE" /> <span className="mono">/api/codespaces/:id/files?path=…</span>
+      </h4>
+      <p>Delete a file or directory (recursive). Refuses the workspace root.</p>
+
+      <h4>
+        <Method m="POST" /> <span className="mono">/api/codespaces/:id/exec</span>
+      </h4>
+      <p>
+        Run an arbitrary bash command in the workspace — the general escape hatch.
+        Body: <code>{`{ "cmd": "..." }`}</code>. Returns{" "}
+        <code>{`{ output, exit_code }`}</code>.
+      </p>
+      <Code>{`curl -s "$SB_URL/api/codespaces/$CS_ID/exec" \\
+  -H "Authorization: Bearer $SB_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"cmd":"ls -la && git log --oneline -5"}' | jq -r .output`}</Code>
+
+      <h4>
+        <Method m="POST" /> <span className="mono">/api/codespaces/:id/git</span>
+      </h4>
+      <p>
+        Run a git operation. Body: <code>{`{ "op", "message"? }`}</code> where{" "}
+        <code>op</code> is <code>status</code> · <code>diff</code> ·{" "}
+        <code>commit</code> · <code>push</code> · <code>pull</code>.{" "}
+        <code>commit</code> requires <code>message</code>; <code>push</code>/
+        <code>pull</code> authenticate to GitHub with the owner's token (via a
+        credential helper, never in the URL). Returns{" "}
+        <code>{`{ op, output, exit_code, ok }`}</code>.
+      </p>
+      <Code>{`# stage everything, commit, and push to the project's branch on GitHub
+curl -s "$SB_URL/api/codespaces/$CS_ID/git" \\
+  -H "Authorization: Bearer $SB_KEY" -H "Content-Type: application/json" \\
+  -d '{"op":"commit","message":"edits from the api"}'
+
+curl -s "$SB_URL/api/codespaces/$CS_ID/git" \\
+  -H "Authorization: Bearer $SB_KEY" -H "Content-Type: application/json" \\
+  -d '{"op":"push"}'`}</Code>
+
+      <h4>
+        <Method m="PATCH" /> <span className="mono">/api/codespaces/:id</span>
+      </h4>
+      <p>
+        Rename a codespace (the label only — the sprite, branch, and clone are
+        untouched). Body: <code>{`{ "name": "..." }`}</code>.
+      </p>
+
+      <h4>
+        <Method m="DELETE" /> <span className="mono">/api/codespaces/:id</span>
+      </h4>
+      <p>
+        Destroy a codespace and tear down its sprite. Returns{" "}
+        <code>{`{ "ok": true }`}</code>. (Commit and push first — this discards the
+        working tree.)
+      </p>
 
       {/* ------------------------------------------------------------------ */}
       <h3 id="admin">Admin</h3>
