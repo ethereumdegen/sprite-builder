@@ -125,13 +125,19 @@ SQL style used throughout `projects.rs` (consistent with ADR-0017).
 
 ## Deferred phases
 
-- **Phase 2 (ephemerality):** S3/DO Spaces snapshot + stop/start hibernation,
-  presigned-URL based (S3 creds stay server-side, ADR-0011).
+- ~~**Phase 2 (ephemerality):** S3/DO Spaces snapshot + stop/start hibernation.~~
+  **Dropped.** sprites.dev hibernates idle sprites natively (~100–500ms warm wake,
+  1–2s cold), preserves the entire filesystem indefinitely, and bills only active
+  compute + storage (no idle charges). App-level S3 snapshot/restore would just
+  re-implement that, worse. `snapshot_key` / `stopped` remain as reserved slots.
 - **Phase 3 (git remote):** codespace-as-git-remote via in-sprite `git http-backend`.
 - **Phase 4 (later):** let a build target a Codespace instead of a fresh clone.
 
-## To verify during implementation
+## Verified (sprites.dev lifecycle)
 
-Sprite idle lifecycle — whether sprites.dev auto-suspends/tears down an idle
-sprite. Affects whether a `ready` codespace stays reachable between edits; if they
-auto-suspend, it strengthens the case for Phase 2 hibernation.
+Idle sprites **hibernate automatically and wake on demand**; the filesystem
+(`/workspace/app`, git repo, installed packages) persists indefinitely with no
+documented TTL/auto-deletion. Billing is active-compute + storage only — idle is
+free. Caveat: hibernation preserves **disk, not RAM** — running processes stop on
+sleep (harmless here; every op is a fresh stateless exec). Pricing: $0.07/CPU-hr,
+$0.04375/GB-hr; a ~4h session ≈ $0.44.

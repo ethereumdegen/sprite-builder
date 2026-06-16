@@ -200,9 +200,19 @@ pub async fn list_codespaces(
 
 #[derive(Deserialize, Default)]
 pub struct CreateCodespaceBody {
-    /// Optional friendly name. Defaults to the project's default branch.
+    /// Optional friendly name. Defaults to a random adjective-noun pair.
     #[serde(default)]
     pub name: Option<String>,
+}
+
+/// A random adjective-noun label (e.g. `selfish-change`) from the `names` crate —
+/// the same source as the sprite subdomain — used as a codespace's default name.
+/// Created and dropped in one expression so the non-Send generator never crosses
+/// an await.
+fn random_name() -> String {
+    names::Generator::default()
+        .next()
+        .unwrap_or_else(|| "codespace".to_string())
 }
 
 /// Create a codespace: insert a `queued` row the worker provisions. The branch is
@@ -220,7 +230,7 @@ pub async fn create_codespace(
         .name
         .map(|n| n.trim().to_string())
         .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| branch.clone());
+        .unwrap_or_else(random_name);
 
     let cs = sqlx::query_as::<_, Codespace>(
         r#"INSERT INTO codespaces (project_id, name, branch, status)
@@ -242,6 +252,36 @@ pub async fn get_codespace(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Codespace>> {
     Ok(Json(load_owned_codespace(&app, user.id, id).await?))
+}
+
+#[derive(Deserialize)]
+pub struct RenameCodespaceBody {
+    pub name: String,
+}
+
+/// Rename a codespace — the friendly label only; the sprite, branch, and clone
+/// are untouched.
+pub async fn rename_codespace(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<RenameCodespaceBody>,
+) -> AppResult<Json<Codespace>> {
+    load_owned_codespace(&app, user.id, id).await?;
+    let name = body.name.trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::bad_request("name is required"));
+    }
+    let cs = sqlx::query_as::<_, Codespace>(
+        r#"UPDATE codespaces SET name = $1, updated_at = now() WHERE id = $2
+           RETURNING id, project_id, name, branch, status, sprite_name, url, snapshot_key,
+                     logs, error, metadata, created_at, updated_at, started_at, finished_at"#,
+    )
+    .bind(name)
+    .bind(id)
+    .fetch_one(&app.db)
+    .await?;
+    Ok(Json(cs))
 }
 
 /// Destroy a codespace: best-effort delete of the live sprite, then the row.

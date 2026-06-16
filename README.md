@@ -207,7 +207,7 @@ curl -H "Authorization: Bearer $KEY" $BASE/api/builds/<build-id>
 | GET/POST | `/api/projects/:id/builds`      | list / trigger builds                |
 | GET    | `/api/builds/:id`                 | build status, logs, url, metadata    |
 | GET/POST | `/api/projects/:id/codespaces`  | list / create codespaces             |
-| GET/DELETE | `/api/codespaces/:id`           | codespace status / destroy           |
+| GET/PATCH/DELETE | `/api/codespaces/:id`     | status / rename (`{name}`) / destroy |
 | GET/PUT/DELETE | `/api/codespaces/:id/files`  | read-or-list / write / delete a path |
 | POST   | `/api/codespaces/:id/exec`        | run a bash command in the workspace  |
 | POST   | `/api/codespaces/:id/git`         | `{op: status\|diff\|commit\|push\|pull}` |
@@ -269,6 +269,8 @@ project ──▶ create Codespace ──▶ [worker] create sprite + git clone 
   GitHub token (via a git credential helper, never in the clone URL), sets the
   commit identity (`<github_login>` / `<login>@users.noreply.github.com`), and
   marks the codespace `ready`. Lifecycle: `queued → provisioning → ready | failed`.
+  New codespaces get a **random `adjective-noun` name** (the same `names` crate
+  that picks sprite subdomains); users can rename them anytime (`PATCH`).
 - **Files / exec / git** run **synchronously** against the live sprite from the
   API server (the same bounded-exec pattern as build runtime logs). Everything the
   caller sends — paths, file contents, the exec command, commit messages, the
@@ -277,8 +279,17 @@ project ──▶ create Codespace ──▶ [worker] create sprite + git clone 
   `/workspace/app` (rejected client-side, then re-checked in-sprite with
   `realpath` to defeat symlink escapes), and project secrets are redacted from
   returned output.
-- The **sprite stays alive** as the codespace's filesystem (v1). There is no
-  hibernation yet — see *Roadmap* below.
+- The **sprite stays alive** as the codespace's filesystem. We deliberately don't
+  build our own hibernation: sprites.dev **already hibernates idle sprites and
+  wakes them on demand** (~100–500ms warm, 1–2s cold), preserves the **entire
+  filesystem indefinitely**, and bills only active compute + storage — *there are
+  no charges while idle*. So an idle codespace already costs only its storage and
+  resumes in under a second; an app-level S3 snapshot/restore would just
+  re-implement a native platform feature, worse.
+  - Caveat: hibernation preserves **disk, not RAM** — running processes stop on
+    sleep. Harmless here (every file/exec/git op is a fresh stateless exec); it
+    only matters if a codespace later runs a persistent dev server, which sprites
+    handles via auto-restarting *Services*.
 
 The `exec` endpoint is fully live but has no terminal box in the v1 UI (it's
 API-only, for agents/scripts); the web UI exposes the file browser/editor and the
@@ -286,10 +297,10 @@ commit/push panel.
 
 ### Roadmap (not built yet)
 
-- **Phase 2 — hibernation.** Snapshot `/workspace` to S3/DigitalOcean Spaces on
-  *stop* and restore it onto a fresh sprite on *start*, so idle codespaces cost
-  nothing. The `codespaces.snapshot_key` column and the `stopped` status are
-  reserved for this.
+- ~~**Phase 2 — app-level hibernation (S3/DO Spaces).**~~ **Dropped** — sprites.dev
+  hibernates idle sprites natively and persists the filesystem indefinitely, so
+  this is redundant. The `codespaces.snapshot_key` column / `stopped` status
+  remain only as harmless reserved slots.
 - **Phase 3 — codespace as a git remote.** Run `git http-backend` inside the
   sprite so you can push/pull to the codespace *itself*, not just GitHub.
 - **Phase 4 — build off a codespace.** Let a build target a codespace's working

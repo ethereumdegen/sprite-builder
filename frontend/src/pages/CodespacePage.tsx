@@ -25,9 +25,12 @@ export default function CodespacePage() {
   const { id } = useParams<{ id: string }>();
   const cs = useCodespaces((s) => (id ? s.byId[id] : undefined));
   const load = useCodespaces((s) => s.load);
+  const rename = useCodespaces((s) => s.rename);
   const remove = useCodespaces((s) => s.remove);
   const navigate = useNavigate();
 
+  const [renaming, setRenaming] = useState(false);
+  const [nameInput, setNameInput] = useState("");
   const [missing, setMissing] = useState(false);
   const [dir, setDir] = useState("");
   const [entries, setEntries] = useState<FileEntry[] | null>(null);
@@ -136,6 +139,21 @@ export default function CodespacePage() {
     }
   };
 
+  const saveName = async () => {
+    if (!id) return;
+    const n = nameInput.trim();
+    if (!n) {
+      setRenaming(false);
+      return;
+    }
+    try {
+      await rename(id, n);
+      setRenaming(false);
+    } catch (e) {
+      setErr(msg(e));
+    }
+  };
+
   const destroy = async () => {
     if (!id || !cs) return;
     if (!window.confirm("Delete this codespace and tear down its sprite?")) return;
@@ -165,15 +183,46 @@ export default function CodespacePage() {
 
       <div className="card">
         <div className="row" style={{ justifyContent: "space-between" }}>
-          <h2 style={{ margin: 0 }}>
-            {cs.name} <span className={"badge " + cs.status}>{cs.status}</span>{" "}
-            {(cs.status === "queued" || cs.status === "provisioning") && (
-              <span className="spin">⟳</span>
+          {renaming ? (
+            <div className="row">
+              <input
+                value={nameInput}
+                autoFocus
+                onChange={(e) => setNameInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveName();
+                  if (e.key === "Escape") setRenaming(false);
+                }}
+              />
+              <button onClick={saveName}>Save</button>
+              <button className="secondary" onClick={() => setRenaming(false)}>
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <h2 style={{ margin: 0 }}>
+              {cs.name} <span className={"badge " + cs.status}>{cs.status}</span>{" "}
+              {(cs.status === "queued" || cs.status === "provisioning") && (
+                <span className="spin">⟳</span>
+              )}
+            </h2>
+          )}
+          <div className="row">
+            {!renaming && (
+              <button
+                className="secondary"
+                onClick={() => {
+                  setNameInput(cs.name);
+                  setRenaming(true);
+                }}
+              >
+                Rename
+              </button>
             )}
-          </h2>
-          <button className="secondary" onClick={destroy}>
-            Delete
-          </button>
+            <button className="secondary" onClick={destroy}>
+              Delete
+            </button>
+          </div>
         </div>
         <div className="muted mono">
           branch: {cs.branch}

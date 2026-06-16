@@ -11,6 +11,7 @@ interface CodespacesState {
   loadForProject: (projectId: string) => Promise<void>;
   load: (id: string) => Promise<Codespace>;
   create: (projectId: string, name?: string) => Promise<Codespace>;
+  rename: (id: string, name: string) => Promise<Codespace>;
   remove: (id: string, projectId: string) => Promise<void>;
 }
 
@@ -35,6 +36,19 @@ export const useCodespaces = create<CodespacesState>((set) => ({
       },
       byId: { ...s.byId, [cs.id]: cs },
     }));
+    return cs;
+  },
+  rename: async (id, name) => {
+    const cs = await api.renameCodespace(id, name.trim());
+    set((s) => {
+      const list = s.byProject[cs.project_id];
+      return {
+        byId: { ...s.byId, [id]: cs },
+        byProject: list
+          ? { ...s.byProject, [cs.project_id]: list.map((c) => (c.id === id ? cs : c)) }
+          : s.byProject,
+      };
+    });
     return cs;
   },
   remove: async (id, projectId) => {

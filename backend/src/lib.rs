@@ -134,7 +134,12 @@ pub fn build_router(state: AppState) -> Router {
             "/api/projects/:id/codespaces",
             get(codespaces::list_codespaces).post(codespaces::create_codespace),
         )
-        .route("/api/codespaces/:id", get(codespaces::get_codespace).delete(codespaces::delete_codespace))
+        .route(
+            "/api/codespaces/:id",
+            get(codespaces::get_codespace)
+                .patch(codespaces::rename_codespace)
+                .delete(codespaces::delete_codespace),
+        )
         .route(
             "/api/codespaces/:id/files",
             get(codespaces::read_path)

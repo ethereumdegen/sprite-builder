@@ -272,6 +272,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name }),
     }),
+  renameCodespace: (id: string, name: string) =>
+    req<Codespace>(`/api/codespaces/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
   deleteCodespace: (id: string) =>
     req<{ ok: boolean }>(`/api/codespaces/${id}`, { method: "DELETE" }),
   csRead: (id: string, path: string) =>
