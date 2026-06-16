@@ -146,6 +146,7 @@ pub fn build_router(state: AppState) -> Router {
                 .put(codespaces::write_file)
                 .delete(codespaces::delete_path),
         )
+        .route("/api/codespaces/:id/clone", post(codespaces::clone))
         .route("/api/codespaces/:id/exec", post(codespaces::exec))
         .route("/api/codespaces/:id/git", post(codespaces::git))
         // admin dashboard (capability-gated by the AdminUser extractor)

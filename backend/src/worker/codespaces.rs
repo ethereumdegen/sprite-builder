@@ -1,35 +1,37 @@
 //! Codespace provisioning worker — an independent loop (decoupled from the build
-//! loop) that turns a `queued` codespace into a live sprite holding a git clone.
+//! loop) that turns a `queued` codespace into a live, *empty* sprite.
 //!
 //! Mirrors the build worker's queue discipline (ADR 0006: `FOR UPDATE SKIP
-//! LOCKED`, no broker) but does far less: create a sprite, clone the repo at the
-//! codespace's branch into `/workspace/app`, set the commit identity, mark
-//! `ready`. No Docker, no `docker run` — interactive file/exec/git work happens
-//! later, synchronously, against the live sprite (see `crate::codespaces`).
+//! LOCKED`, no broker) but does very little: create a sprite, make an empty
+//! `/workspace/app`, mark `ready`. It deliberately does **not** clone a repo —
+//! cloning is an explicit action the user/agent triggers later
+//! (`POST /api/codespaces/:id/clone`), so provisioning stays fast and a slow or
+//! failing clone can never wedge it. All interactive work (files/exec/git/clone)
+//! runs synchronously against the live sprite (see `crate::codespaces`).
 
 use std::time::Duration;
 
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::models::{Codespace, Project, User};
+use crate::models::Codespace;
 use crate::AppState;
 
 /// Cap on sprite provisioning (`POST /sprites`).
 const CREATE_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Cap on the clone exec — a large repo over the synchronous exec endpoint.
-const CLONE_TIMEOUT: Duration = Duration::from_secs(600);
+/// Cap on the (trivial) workspace-setup exec.
+const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A codespace stuck in `provisioning` past this is considered abandoned (worker
-/// crashed) and gets reaped. Must exceed CLONE_TIMEOUT.
+/// crashed) and gets reaped. Comfortably exceeds CREATE_TIMEOUT + SETUP_TIMEOUT.
 const STALE_MINUTES: i32 = 30;
 
 /// Friendly-name attempts before falling back to an id-suffixed name.
 const MAX_NAME_ATTEMPTS: u32 = 8;
 
-/// Final line of the clone script; its presence proves every prior step ran
-/// (the script is `set -euo pipefail`), independent of exec HTTP framing.
+/// Final line of the setup script; its presence proves it ran to completion,
+/// independent of exec HTTP framing.
 const SUCCESS_MARKER: &str = "__CS_PROVISION_OK__";
 
 /// Spawn the codespace provisioning loop + its reaper alongside the build loop.
@@ -84,23 +86,6 @@ async fn claim_next(db: &PgPool) -> sqlx::Result<Option<Codespace>> {
 }
 
 async fn provision(app: &AppState, cs: Codespace) -> anyhow::Result<()> {
-    let project = sqlx::query_as::<_, Project>(
-        r#"SELECT id, user_id, name, repo_full_name, repo_id, default_branch,
-                  dockerfile_path, container_port, created_at
-           FROM projects WHERE id = $1"#,
-    )
-    .bind(cs.project_id)
-    .fetch_one(&app.db)
-    .await?;
-    let owner = sqlx::query_as::<_, User>(
-        r#"SELECT id, github_id, github_login, name, avatar_url, github_token,
-                  created_at, updated_at, role
-           FROM users WHERE id = $1"#,
-    )
-    .bind(project.user_id)
-    .fetch_one(&app.db)
-    .await?;
-
     let sprite = generate_sprite_name(&app.db, cs.id).await?;
     let mut log = format!("==> provisioning codespace on sprite {sprite}\n");
     sqlx::query("UPDATE codespaces SET sprite_name = $1, logs = $2, updated_at = now() WHERE id = $3")
@@ -119,7 +104,7 @@ async fn provision(app: &AppState, cs: Codespace) -> anyhow::Result<()> {
             return fail(app, cs.id, &sprite, &mut log, &msg).await;
         }
     };
-    log.push_str("==> sprite created; cloning repo\n");
+    log.push_str("==> sprite created; preparing workspace\n");
     let _ = sqlx::query("UPDATE codespaces SET url = $1, logs = $2, updated_at = now() WHERE id = $3")
         .bind(&url)
         .bind(&log)
@@ -127,20 +112,22 @@ async fn provision(app: &AppState, cs: Codespace) -> anyhow::Result<()> {
         .execute(&app.db)
         .await;
 
-    // Clone (synchronous, bounded). The token rides a credential helper, never
-    // the clone URL, and is redacted from anything we store (ADR 0013).
-    let script = clone_script(&project.repo_full_name, &cs.branch, &owner.github_login, &owner.github_token);
-    let output = match tokio::time::timeout(CLONE_TIMEOUT, app.sprites.exec(&sprite, &script)).await {
+    // Make an empty workspace. No clone — the user/agent clones explicitly later
+    // (`POST /api/codespaces/:id/clone`). This trivial exec keeps provisioning
+    // fast and unwedgeable.
+    let script =
+        format!("set -euo pipefail\nmkdir -p /workspace/app\necho \"{SUCCESS_MARKER}\"\n");
+    let output = match tokio::time::timeout(SETUP_TIMEOUT, app.sprites.exec(&sprite, &script)).await
+    {
         Ok(Ok(res)) => res.output,
-        Ok(Err(e)) => return fail(app, cs.id, &sprite, &mut log, &format!("clone exec failed: {e}")).await,
-        Err(_) => return fail(app, cs.id, &sprite, &mut log, &format!("clone timed out after {}s", CLONE_TIMEOUT.as_secs())).await,
+        Ok(Err(e)) => return fail(app, cs.id, &sprite, &mut log, &format!("workspace setup failed: {e}")).await,
+        Err(_) => return fail(app, cs.id, &sprite, &mut log, "workspace setup timed out").await,
     };
-    log.push_str(&redact(&output, &owner.github_token));
-    if !log.ends_with('\n') {
-        log.push('\n');
-    }
 
     if output.contains(SUCCESS_MARKER) {
+        log.push_str(
+            "==> workspace ready at /workspace/app (empty — clone a repo or write files via the API)\n",
+        );
         sqlx::query(
             r#"UPDATE codespaces
                SET status = 'ready', logs = $1, error = NULL,
@@ -154,7 +141,7 @@ async fn provision(app: &AppState, cs: Codespace) -> anyhow::Result<()> {
         tracing::info!("codespace {} ready on {}", cs.id, sprite);
         Ok(())
     } else {
-        fail(app, cs.id, &sprite, &mut log, "clone did not complete (see logs)").await
+        fail(app, cs.id, &sprite, &mut log, "workspace setup did not complete").await
     }
 }
 
@@ -181,43 +168,6 @@ async fn fail(
     let _ = app.sprites.delete_sprite(sprite).await;
     tracing::warn!("codespace {} failed: {}", id, err);
     Ok(())
-}
-
-/// The clone script. Tries the requested branch first, falling back to the repo's
-/// default branch if it doesn't exist remotely.
-fn clone_script(repo: &str, branch: &str, login: &str, token: &str) -> String {
-    format!(
-        r#"set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-export CS_GH_TOKEN='{token}'
-HELPER='!f() {{ echo username=x-access-token; echo "password=$CS_GH_TOKEN"; }}; f'
-echo "==> preparing /workspace"
-rm -rf /workspace && mkdir -p /workspace && cd /workspace
-echo "==> cloning {repo} (branch {branch})"
-git -c credential.helper="$HELPER" clone --no-progress --branch "{branch}" "https://github.com/{repo}.git" app \
-  || git -c credential.helper="$HELPER" clone --no-progress "https://github.com/{repo}.git" app
-cd app
-git config user.name '{login}'
-git config user.email '{login}@users.noreply.github.com'
-echo "==> HEAD: $(git rev-parse --short HEAD)"
-echo "{marker}"
-"#,
-        token = token,
-        repo = repo,
-        branch = branch,
-        login = login,
-        marker = SUCCESS_MARKER,
-    )
-}
-
-/// Scrub the GitHub token from anything we persist (defense in depth — the
-/// credential helper keeps it out of the clone URL already).
-fn redact(s: &str, token: &str) -> String {
-    if token.is_empty() {
-        s.to_string()
-    } else {
-        s.replace(token, "***")
-    }
 }
 
 /// Generate a friendly, DNS-safe, unique sprite name for a codespace. The name is

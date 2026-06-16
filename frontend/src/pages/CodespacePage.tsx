@@ -41,6 +41,8 @@ export default function CodespacePage() {
   const [commitMsg, setCommitMsg] = useState("");
   const [gitOut, setGitOut] = useState("");
   const [gitBusy, setGitBusy] = useState(false);
+  const [cloneBranch, setCloneBranch] = useState("");
+  const [cloning, setCloning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const ready = cs?.status === "ready";
@@ -136,6 +138,22 @@ export default function CodespacePage() {
       setErr(msg(e));
     } finally {
       setGitBusy(false);
+    }
+  };
+
+  const doClone = async () => {
+    if (!id) return;
+    setCloning(true);
+    setErr(null);
+    try {
+      const r = await api.csClone(id, { branch: cloneBranch.trim() || undefined });
+      setGitOut(`$ git clone${r.ok ? "" : ` — exit ${r.exit_code}`}\n${r.output || "(no output)"}`);
+      setFile(null);
+      await loadDir("");
+    } catch (e) {
+      setErr(msg(e));
+    } finally {
+      setCloning(false);
     }
   };
 
@@ -248,6 +266,27 @@ export default function CodespacePage() {
 
       {ready && (
         <>
+          <div className="card">
+            <h3 style={{ marginTop: 0 }}>Clone a repo</h3>
+            <p className="muted">
+              The workspace starts empty. Clone the project's repo into{" "}
+              <code>/workspace/app</code> (replaces its contents) — or skip this and
+              build up files via the API.
+            </p>
+            <div className="row">
+              <input
+                placeholder={`branch (default ${cs.branch})`}
+                value={cloneBranch}
+                onChange={(e) => setCloneBranch(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button onClick={doClone} disabled={cloning} style={{ whiteSpace: "nowrap" }}>
+                {cloning ? "Cloning…" : "Clone repo"}
+              </button>
+              {cloning && <span className="spin">⟳</span>}
+            </div>
+          </div>
+
           <div style={{ display: "grid", gridTemplateColumns: "minmax(220px, 1fr) 2fr", gap: 12 }}>
             {/* file browser */}
             <div className="card">

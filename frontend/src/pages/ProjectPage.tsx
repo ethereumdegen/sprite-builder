@@ -191,8 +191,8 @@ function CodespacesSection({ projectId, branch }: { projectId: string; branch: s
         </button>
       </div>
       <p className="muted">
-        An ephemeral coding filesystem — clones <b>{branch}</b> into a live sandbox you can edit,
-        commit, and push back to GitHub.
+        An ephemeral coding filesystem on branch <b>{branch}</b> — a live sandbox you can clone a
+        repo into, edit, run commands in, and push back to GitHub.
       </p>
       {error && <p style={{ color: "var(--red)" }}>{error}</p>}
       {codespaces.length === 0 ? (

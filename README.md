@@ -208,6 +208,7 @@ curl -H "Authorization: Bearer $KEY" $BASE/api/builds/<build-id>
 | GET    | `/api/builds/:id`                 | build status, logs, url, metadata    |
 | GET/POST | `/api/projects/:id/codespaces`  | list / create codespaces             |
 | GET/PATCH/DELETE | `/api/codespaces/:id`     | status / rename (`{name}`) / destroy |
+| POST   | `/api/codespaces/:id/clone`       | clone a repo into the workspace      |
 | GET/PUT/DELETE | `/api/codespaces/:id/files`  | read-or-list / write / delete a path |
 | POST   | `/api/codespaces/:id/exec`        | run a bash command in the workspace  |
 | POST   | `/api/codespaces/:id/git`         | `{op: status\|diff\|commit\|push\|pull}` |
@@ -254,23 +255,30 @@ into a running image; a codespace gives you a *live, editable working tree* you
 (or an agent) can read, write, run commands in, and push back to GitHub.
 
 ```
-project ──▶ create Codespace ──▶ [worker] create sprite + git clone into /workspace/app ──▶ ready
+project ──▶ create Codespace ──▶ [worker] create sprite + empty /workspace/app ──▶ ready (fast)
                                                   │
    interactive, synchronous (against the live sprite via the exec API):
-   ├─ list/read/write/delete files under /workspace/app   (path-jailed)
-   ├─ run arbitrary bash                                   ("as if local")
-   └─ git status / diff / commit / push / pull             (token via credential helper)
+   ├─ clone a repo into /workspace/app                     (explicit; token via credential helper)
+   ├─ list/read/write/delete files under /workspace/app    (path-jailed)
+   ├─ run arbitrary bash                                    ("as if local")
+   └─ git status / diff / commit / push / pull              (token via credential helper)
 ```
 
 - **Provisioning** is asynchronous, on the same Postgres queue discipline as
   builds (`FOR UPDATE SKIP LOCKED`) but in its **own worker loop**
-  (`worker/codespaces.rs`) — independent of the build queue. It creates a sprite,
-  clones the project's **default branch** into `/workspace/app` with the owner's
-  GitHub token (via a git credential helper, never in the clone URL), sets the
-  commit identity (`<github_login>` / `<login>@users.noreply.github.com`), and
-  marks the codespace `ready`. Lifecycle: `queued → provisioning → ready | failed`.
-  New codespaces get a **random `adjective-noun` name** (the same `names` crate
-  that picks sprite subdomains); users can rename them anytime (`PATCH`).
+  (`worker/codespaces.rs`) — independent of the build queue. It just creates a
+  sprite with an **empty** `/workspace/app` and marks the codespace `ready` —
+  it's fast and can't wedge on a slow clone. Lifecycle:
+  `queued → provisioning → ready | failed`. New codespaces get a **random
+  `adjective-noun` name** (the same `names` crate that picks sprite subdomains);
+  users can rename them anytime (`PATCH`).
+- **Cloning is explicit**, not automatic — the user or agent calls
+  `POST /api/codespaces/:id/clone` (defaults to the project's repo + the
+  codespace's branch). The clone uses the owner's token via a git credential
+  helper (never in the URL), sets the commit identity (`<github_login>` /
+  `<login>@users.noreply.github.com`), and runs with `GIT_TERMINAL_PROMPT=0` so an
+  auth failure fails fast instead of hanging. A codespace can equally start empty
+  and have files written into it from scratch.
 - **Files / exec / git** run **synchronously** against the live sprite from the
   API server (the same bounded-exec pattern as build runtime logs). Everything the
   caller sends — paths, file contents, the exec command, commit messages, the

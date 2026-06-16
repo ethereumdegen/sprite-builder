@@ -446,12 +446,12 @@ done`}</Code>
       <h3 id="codespaces">Codespaces</h3>
       <p>
         A <strong>codespace</strong> is an ephemeral coding filesystem — a live
-        git working tree in a sandbox that you (or an agent) can read, write, run
-        bash in, and push back to GitHub. Unlike a build (which turns a repo into
-        a running image), a codespace stays editable. Same auth as everything
-        else: send your <code>Authorization: Bearer sb_…</code> key. The actions
-        below are exactly what an agent needs to operate on a repo "as if on a
-        local machine."
+        sandbox you (or an agent) can clone a repo into, read, write, run bash in,
+        and push back to GitHub. It starts <em>empty</em>; cloning is an explicit
+        step. Unlike a build (which turns a repo into a running image), a codespace
+        stays editable. Same auth as everything else: send your{" "}
+        <code>Authorization: Bearer sb_…</code> key. The actions below are exactly
+        what an agent needs to operate on a repo "as if on a local machine."
       </p>
       <p>
         Statuses:{" "}
@@ -471,13 +471,14 @@ done`}</Code>
       <p>
         Create a codespace. The body is optional — <code>name</code> defaults to a
         random <code>adjective-noun</code> label. It provisions asynchronously
-        (creates a sprite, clones the project's default branch), so poll until{" "}
-        <code>status</code> is <code>ready</code>.
+        (creates a sprite with an <strong>empty</strong> workspace — it does{" "}
+        <em>not</em> clone anything), so poll until <code>status</code> is{" "}
+        <code>ready</code>. Cloning a repo is a separate, explicit step (below).
       </p>
       <Code>{`CS_ID=$(curl -s "$SB_URL/api/projects/$PROJECT_ID/codespaces" \\
   -H "Authorization: Bearer $SB_KEY" -X POST | jq -r .id)
 
-# poll until the clone finishes
+# poll until the sprite is ready (fast — no clone)
 while :; do
   S=$(curl -s "$SB_URL/api/codespaces/$CS_ID" \\
         -H "Authorization: Bearer $SB_KEY" | jq -r .status)
@@ -488,6 +489,28 @@ while :; do
   esac
   sleep 3
 done`}</Code>
+
+      <h4>
+        <Method m="POST" /> <span className="mono">/api/codespaces/:id/clone</span>
+      </h4>
+      <p>
+        Clone a repo into <code>/workspace/app</code> (replacing its contents).
+        The body is optional: <code>repo_full_name</code> defaults to the project's
+        repo and <code>branch</code> to the codespace's branch. Uses the owner's
+        GitHub token server-side (credential helper, never in the URL) and sets the
+        commit identity. Returns <code>{`{ op, output, exit_code, ok }`}</code>. A
+        codespace can equally stay empty and have files written from scratch — this
+        step is optional.
+      </p>
+      <Code>{`# clone the project's repo (default branch)
+curl -s "$SB_URL/api/codespaces/$CS_ID/clone" \\
+  -H "Authorization: Bearer $SB_KEY" -H "Content-Type: application/json" \\
+  -d '{}' | jq -r .output
+
+# or a specific repo + branch
+curl -s "$SB_URL/api/codespaces/$CS_ID/clone" \\
+  -H "Authorization: Bearer $SB_KEY" -H "Content-Type: application/json" \\
+  -d '{"repo_full_name":"my-org/other-repo","branch":"dev"}'`}</Code>
 
       <h4>
         <Method m="GET" /> <span className="mono">/api/codespaces/:id</span>

@@ -290,6 +290,11 @@ export const api = {
     req<{ ok: boolean }>(`/api/codespaces/${id}/files?path=${encodeURIComponent(path)}`, {
       method: "DELETE",
     }),
+  csClone: (id: string, opts?: { repo_full_name?: string; branch?: string }) =>
+    req<GitResponse>(`/api/codespaces/${id}/clone`, {
+      method: "POST",
+      body: JSON.stringify(opts || {}),
+    }),
   csExec: (id: string, cmd: string) =>
     req<ExecResponse>(`/api/codespaces/${id}/exec`, {
       method: "POST",

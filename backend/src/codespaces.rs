@@ -38,6 +38,10 @@ const FILE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Max wall-clock for an arbitrary `exec` or a git op (push/pull can be slow).
 const EXEC_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Max wall-clock for a `clone` — explicit, user-initiated, and potentially a
+/// large repo, so it gets a longer bound than a normal exec.
+const CLONE_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Cap on a single file's bytes we'll read back or accept on write (1 MiB). Keeps
 /// one synchronous exec sane; larger files are reported `truncated` on read.
 const MAX_FILE_BYTES: usize = 1024 * 1024;
@@ -664,16 +668,101 @@ echo "{EXIT_MARKER}$?""#,
     }))
 }
 
-/// The GitHub token of the project's owner (used for push/pull credentials).
-async fn owner_token(app: &AppState, project_id: Uuid) -> AppResult<String> {
-    let row: Option<(String,)> = sqlx::query_as(
-        r#"SELECT u.github_token
+/// The project owner's GitHub `(token, login)` — token for git credentials, login
+/// for the commit identity.
+async fn owner_creds(app: &AppState, project_id: Uuid) -> AppResult<(String, String)> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        r#"SELECT u.github_token, u.github_login
            FROM users u JOIN projects p ON p.user_id = u.id
            WHERE p.id = $1"#,
     )
     .bind(project_id)
     .fetch_optional(&app.db)
     .await?;
-    row.map(|(t,)| t)
-        .ok_or_else(|| AppError::bad_request("project owner not found"))
+    row.ok_or_else(|| AppError::bad_request("project owner not found"))
+}
+
+/// The GitHub token of the project's owner (used for push/pull credentials).
+async fn owner_token(app: &AppState, project_id: Uuid) -> AppResult<String> {
+    Ok(owner_creds(app, project_id).await?.0)
+}
+
+// ---------------------------------------------------------------------------
+// clone: explicitly pull a repo into the (empty) workspace
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Default)]
+pub struct CloneBody {
+    /// Repo to clone (`owner/repo`). Defaults to the codespace's project repo.
+    #[serde(default)]
+    pub repo_full_name: Option<String>,
+    /// Branch to check out. Defaults to the codespace's branch.
+    #[serde(default)]
+    pub branch: Option<String>,
+}
+
+/// Clone a repo into `/workspace/app` using the owner's GitHub token (via a
+/// credential helper, never the URL). Defaults to the project's repo + the
+/// codespace's branch; `GIT_TERMINAL_PROMPT=0` makes an auth failure fail fast
+/// instead of hanging on a credential prompt. Replaces whatever is in
+/// `/workspace/app`. This is the explicit, user/agent-triggered counterpart to
+/// the old auto-clone — provisioning no longer clones.
+pub async fn clone(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+    body: Option<Json<CloneBody>>,
+) -> AppResult<Json<GitResponse>> {
+    let cs = load_owned_codespace(&app, user.id, id).await?;
+    let sprite = live_sprite(&cs)?;
+    let project = load_owned_project(&app, user.id, cs.project_id).await?;
+    let body = body.map(|Json(b)| b).unwrap_or_default();
+
+    let repo = body
+        .repo_full_name
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(project.repo_full_name);
+    let branch = body
+        .branch
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| cs.branch.clone());
+    let (token, login) = owner_creds(&app, cs.project_id).await?;
+
+    // No `set -e`: we want to capture the clone's exit code even on failure. The
+    // `--branch` attempt falls back to the repo's default branch if it's missing.
+    let script = format!(
+        r#"export GIT_TERMINAL_PROMPT=0
+export CS_GH_TOKEN='{token}'
+HELPER='!f() {{ echo username=x-access-token; echo "password=$CS_GH_TOKEN"; }}; f'
+REPO=$(printf %s '{repo_b64}' | base64 -d)
+BRANCH=$(printf %s '{branch_b64}' | base64 -d)
+cd /workspace 2>/dev/null || {{ echo "{ERR_MARKER}workspace is missing"; echo "{EXIT_MARKER}1"; exit 0; }}
+rm -rf app && mkdir -p app
+echo "==> cloning $REPO (branch $BRANCH)"
+git -c credential.helper="$HELPER" clone --no-progress --branch "$BRANCH" "https://github.com/$REPO.git" app \
+  || git -c credential.helper="$HELPER" clone --no-progress "https://github.com/$REPO.git" app
+RC=$?
+if [ $RC -eq 0 ]; then
+  git -C app config user.name '{login}'
+  git -C app config user.email '{login}@users.noreply.github.com'
+  echo "==> HEAD: $(git -C app rev-parse --short HEAD 2>/dev/null)"
+fi
+echo "{EXIT_MARKER}$RC""#,
+        repo_b64 = b64(&repo),
+        branch_b64 = b64(&branch),
+    );
+
+    let out = run(&app, &sprite, &script, CLONE_TIMEOUT).await?;
+    check_err(&out)?;
+    let (output, exit_code) = split_exit(&out);
+    let mut secrets = redaction_secrets(&app, cs.project_id).await;
+    secrets.push(token);
+    Ok(Json(GitResponse {
+        op: "clone".to_string(),
+        output: redact(output, &secrets),
+        exit_code,
+        ok: exit_code == 0,
+    }))
 }
