@@ -1,19 +1,22 @@
 // Builds domain store (ADR 0007). Keyed by project for the list view, plus a
 // per-build cache for the live detail/diagnostics panel.
 import { create } from "zustand";
-import { api, Build, RuntimeLogs, UrlVisibility } from "../api";
+import { api, Build, DeploymentStatus, RuntimeLogs, UrlVisibility } from "../api";
 
 interface BuildsState {
   byProject: Record<string, Build[]>;
   byId: Record<string, Build>;
   runtimeById: Record<string, RuntimeLogs>;
   visibilityById: Record<string, UrlVisibility>;
+  deploymentById: Record<string, DeploymentStatus>;
   loadForProject: (projectId: string) => Promise<void>;
   loadBuild: (id: string) => Promise<void>;
   loadRuntime: (id: string) => Promise<void>;
   loadVisibility: (id: string) => Promise<void>;
   setVisibility: (id: string, isPublic: boolean) => Promise<void>;
+  loadDeployment: (id: string) => Promise<void>;
   create: (projectId: string, commit?: string) => Promise<Build>;
+  remove: (id: string, projectId: string) => Promise<void>;
 }
 
 export const useBuilds = create<BuildsState>((set) => ({
@@ -21,6 +24,7 @@ export const useBuilds = create<BuildsState>((set) => ({
   byId: {},
   runtimeById: {},
   visibilityById: {},
+  deploymentById: {},
   loadForProject: async (projectId) => {
     const builds = await api.builds(projectId);
     set((s) => ({ byProject: { ...s.byProject, [projectId]: builds } }));
@@ -41,6 +45,10 @@ export const useBuilds = create<BuildsState>((set) => ({
     const vis = await api.setUrlVisibility(id, isPublic);
     set((s) => ({ visibilityById: { ...s.visibilityById, [id]: vis } }));
   },
+  loadDeployment: async (id) => {
+    const dep = await api.deployment(id);
+    set((s) => ({ deploymentById: { ...s.deploymentById, [id]: dep } }));
+  },
   create: async (projectId, commit) => {
     const build = await api.createBuild(projectId, commit?.trim() || undefined);
     set((s) => ({
@@ -51,5 +59,19 @@ export const useBuilds = create<BuildsState>((set) => ({
       byId: { ...s.byId, [build.id]: build },
     }));
     return build;
+  },
+  remove: async (id, projectId) => {
+    await api.deleteBuild(id);
+    set((s) => {
+      const byId = { ...s.byId };
+      delete byId[id];
+      return {
+        byId,
+        byProject: {
+          ...s.byProject,
+          [projectId]: (s.byProject[projectId] || []).filter((b) => b.id !== id),
+        },
+      };
+    });
   },
 }));

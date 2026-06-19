@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use axum::extract::{Path, State};
+use axum::http::StatusCode;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -202,6 +203,102 @@ pub async fn get_build(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Build>> {
     Ok(Json(load_owned_build(&app, user.id, id).await?))
+}
+
+// ---------------------------------------------------------------------------
+// deployment liveness — distinct from the build outcome
+// ---------------------------------------------------------------------------
+
+/// Current liveness of a build's *deployment*, which is NOT the same as the
+/// build outcome. `status = succeeded` is a permanent, point-in-time fact; the
+/// sprite it produced can since be deleted or hibernated away, leaving the
+/// stored `url` pointing at nothing. This reads sprites.dev for the live truth.
+#[derive(Serialize)]
+pub struct DeploymentStatus {
+    /// `none` (this build never produced a deployment) | `live` (sprite is up) |
+    /// `removed` (the sprite is gone) | `unknown` (couldn't reach sprites.dev, so
+    /// don't treat the URL as dead).
+    pub state: String,
+    pub url: Option<String>,
+    /// When live: URL auth mode — `Some(true)` public, `Some(false)` org-only.
+    pub public: Option<bool>,
+    pub message: Option<String>,
+}
+
+/// Probe whether the build's sprite still exists. Cheap enough for the build
+/// page to poll; the heavy lifting is one GET against sprites.dev.
+pub async fn deployment_status(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<DeploymentStatus>> {
+    let build = load_owned_build(&app, user.id, id).await?;
+    let sprite = match &build.sprite_name {
+        Some(s) => s.clone(),
+        None => {
+            let message = if build.status == "queued" || build.status == "running" {
+                "no deployment yet"
+            } else {
+                "this build never produced a deployment"
+            };
+            return Ok(Json(DeploymentStatus {
+                state: "none".into(),
+                url: build.url.clone(),
+                public: None,
+                message: Some(message.into()),
+            }));
+        }
+    };
+
+    match tokio::time::timeout(RUNTIME_LOGS_TIMEOUT, app.sprites.sprite_exists(&sprite)).await {
+        Ok(Some(true)) => {
+            // Best-effort public/org-only read — never fail the liveness call over it.
+            let public = tokio::time::timeout(RUNTIME_LOGS_TIMEOUT, app.sprites.url_auth(&sprite))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+                .map(|a| a == "public");
+            Ok(Json(DeploymentStatus {
+                state: "live".into(),
+                url: build.url.clone(),
+                public,
+                message: None,
+            }))
+        }
+        Ok(Some(false)) => Ok(Json(DeploymentStatus {
+            state: "removed".into(),
+            url: build.url.clone(),
+            public: None,
+            message: Some("the deployment sprite no longer exists".into()),
+        })),
+        _ => Ok(Json(DeploymentStatus {
+            state: "unknown".into(),
+            url: build.url.clone(),
+            public: None,
+            message: Some("could not reach sprites.dev".into()),
+        })),
+    }
+}
+
+/// Delete a build and tear down its deployment. Removes the live sprite (best
+/// effort — a build with no live sprite still deletes cleanly) and the build
+/// record. Owner-scoped via the parent project. This is the missing counterpart
+/// to "the sprite is gone but the build row lingers".
+pub async fn delete_build(
+    State(app): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    let build = load_owned_build(&app, user.id, id).await?;
+    if let Some(sprite) = &build.sprite_name {
+        let _ = app.sprites.delete_sprite(sprite).await;
+    }
+    sqlx::query("DELETE FROM builds WHERE id = $1")
+        .bind(build.id)
+        .execute(&app.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------

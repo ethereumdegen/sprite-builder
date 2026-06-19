@@ -86,6 +86,18 @@ export interface UrlVisibility {
   message: string | null;
 }
 
+// Live deployment status of a build — distinct from its build *outcome*. A build
+// can be `succeeded` (a permanent fact) while its sprite has since been deleted
+// or hibernated away, leaving the stored URL pointing at nothing. `live` = sprite
+// is up; `removed` = sprite is gone; `none` = never deployed; `unknown` = we
+// couldn't reach sprites.dev (so don't treat the URL as dead).
+export interface DeploymentStatus {
+  state: "none" | "live" | "removed" | "unknown";
+  url: string | null;
+  public: boolean | null;
+  message: string | null;
+}
+
 // --- codespaces (ephemeral coding filesystem) ---
 
 export type CodespaceStatus = "queued" | "provisioning" | "ready" | "stopped" | "failed";
@@ -271,6 +283,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ commit_sha }),
     }),
+  deleteBuild: (buildId: string) => req<void>(`/api/builds/${buildId}`, { method: "DELETE" }),
+  deployment: (buildId: string) => req<DeploymentStatus>(`/api/builds/${buildId}/deployment`),
   runtimeLogs: (buildId: string) => req<RuntimeLogs>(`/api/builds/${buildId}/runtime-logs`),
   urlVisibility: (buildId: string) => req<UrlVisibility>(`/api/builds/${buildId}/url-visibility`),
   setUrlVisibility: (buildId: string, isPublic: boolean) =>

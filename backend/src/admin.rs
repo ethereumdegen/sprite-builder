@@ -262,12 +262,29 @@ pub async fn sprites(
 
 /// Tear down a sprite on sprites.dev. Useful for reclaiming orphaned or stuck
 /// sprites directly from the dashboard.
+///
+/// Reconciles our own records: any build that provisioned this sprite no longer
+/// has a live deployment, so flag it (`metadata.deployment_removed`) instead of
+/// leaving a `succeeded` build pointing at a now-dead URL. The build page's live
+/// probe is authoritative, but this keeps list views honest without a probe and
+/// is the cheap fix for the "orphaned build row" the deletion would otherwise
+/// create. The build's `status` is left untouched — the build still *succeeded*;
+/// only the deployment is gone.
 pub async fn delete_sprite(
     State(app): State<AppState>,
     _admin: AdminUser,
     Path(name): Path<String>,
 ) -> AppResult<StatusCode> {
     app.sprites.delete_sprite(&name).await?;
+    sqlx::query(
+        r#"UPDATE builds
+           SET metadata = metadata || jsonb_build_object('deployment_removed', true),
+               updated_at = now()
+           WHERE sprite_name = $1"#,
+    )
+    .bind(&name)
+    .execute(&app.db)
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

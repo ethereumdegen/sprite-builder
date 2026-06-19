@@ -4,7 +4,7 @@ import { api, Project } from "../api";
 import { useBuilds } from "../stores/builds";
 import { useCodespaces } from "../stores/codespaces";
 import { useDocuspaces } from "../stores/docuspaces";
-import { buildDuration, isActive } from "../components/build";
+import { buildDuration, deploymentRemoved, isActive } from "../components/build";
 import { VariablesEditor } from "../components/variables";
 
 // ---------------------------------------------------------------------------
@@ -122,10 +122,15 @@ export default function ProjectPage() {
                 </div>
               </div>
               <div className="row">
-                {b.url && b.status === "succeeded" && (
+                {b.url && b.status === "succeeded" && !deploymentRemoved(b) && (
                   <a href={b.url} target="_blank" rel="noreferrer">
                     Open ↗
                   </a>
+                )}
+                {b.status === "succeeded" && deploymentRemoved(b) && (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    deployment removed
+                  </span>
                 )}
                 <Link className="secondary" to={`/builds/${b.id}`}>
                   Details

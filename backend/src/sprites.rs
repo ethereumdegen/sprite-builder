@@ -211,6 +211,28 @@ impl SpritesClient {
         Ok(())
     }
 
+    /// Whether a sprite still exists on sprites.dev. GET /v1/sprites/{name}:
+    /// `2xx → Some(true)`, `404 → Some(false)`, anything else / transport error
+    /// → `None` (we genuinely couldn't tell, so callers must not assume removed).
+    /// This is the source of truth for "is the deployment still live" — a build
+    /// can be `succeeded` long after its sprite was hibernated away or deleted.
+    pub async fn sprite_exists(&self, name: &str) -> Option<bool> {
+        let resp = self
+            .http
+            .get(self.url(&format!("/sprites/{name}")))
+            .header("Authorization", self.bearer())
+            .send()
+            .await
+            .ok()?;
+        if resp.status().is_success() {
+            Some(true)
+        } else if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            Some(false)
+        } else {
+            None
+        }
+    }
+
     /// The sprite's current URL auth mode ("public" | "sprite"), if reported.
     /// GET /v1/sprites/{name} → url_settings.auth.
     pub async fn url_auth(&self, sprite: &str) -> anyhow::Result<Option<String>> {

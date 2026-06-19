@@ -3,10 +3,15 @@
 // project page and the dedicated build show page (/builds/:id), so the live-log
 // rendering lives in exactly one place.
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { Build } from "../api";
+import { useNavigate } from "react-router-dom";
+import { Build, DeploymentStatus } from "../api";
 import { useBuilds } from "../stores/builds";
 
 export const isActive = (b: Build) => b.status === "queued" || b.status === "running";
+
+/// A build whose admin-deleted sprite we already flagged, without needing a live
+/// probe. The live `/deployment` check is still authoritative when available.
+export const deploymentRemoved = (b: Build) => b.metadata?.deployment_removed === true;
 
 function fmtDuration(ms: number): string {
   if (ms < 0) ms = 0;
@@ -41,10 +46,26 @@ export function Stat({ k, v, block }: { k: string; v: ReactNode; block?: boolean
   );
 }
 
+/// Poll the live deployment status of a succeeded build. The sprite behind a
+/// `succeeded` build can be hibernated away or deleted at any time, so a one-shot
+/// read goes stale — we re-probe on an interval while the page is open.
+function useDeployment(build: Build): DeploymentStatus | undefined {
+  const dep = useBuilds((s) => s.deploymentById[build.id]);
+  const loadDeployment = useBuilds((s) => s.loadDeployment);
+  useEffect(() => {
+    if (build.status !== "succeeded") return;
+    const tick = () => loadDeployment(build.id).catch(() => {});
+    tick();
+    const t = setInterval(tick, 10000);
+    return () => clearInterval(t);
+  }, [build.id, build.status, loadDeployment]);
+  return build.status === "succeeded" ? dep : undefined;
+}
+
 /// Diagnostics grid + error + live logs for a single build. Caller owns the
 /// surrounding chrome (card, header, close button, page layout).
 export function BuildBody({ build, now }: { build: Build; now: number }) {
-  const ready = build.metadata?.ready;
+  const dep = useDeployment(build);
 
   return (
     <>
@@ -52,36 +73,10 @@ export function BuildBody({ build, now }: { build: Build; now: number }) {
         <Stat k="Commit" v={<span className="mono">{build.commit_sha.slice(0, 12)}</span>} />
         <Stat k="Duration" v={buildDuration(build, now)} />
         <Stat k="Sprite" v={<span className="mono">{build.sprite_name || "—"}</span>} />
-        <Stat
-          k="Reachable"
-          v={
-            ready === true ? (
-              <span style={{ color: "var(--green)" }}>✓ yes</span>
-            ) : ready === false ? (
-              <span style={{ color: "var(--red)" }}>✗ no</span>
-            ) : (
-              "—"
-            )
-          }
-        />
+        <Stat k="Deployment" v={<DeploymentBadge build={build} dep={dep} />} />
       </div>
 
-      <Stat
-        k="URL"
-        v={
-          build.url ? (
-            <>
-              <a href={build.url} target="_blank" rel="noreferrer">
-                {build.url}
-              </a>
-              <UrlVisibilityControl build={build} />
-            </>
-          ) : (
-            "—"
-          )
-        }
-        block
-      />
+      <DeploymentUrl build={build} dep={dep} />
 
       {build.error && (
         <>
@@ -95,7 +90,121 @@ export function BuildBody({ build, now }: { build: Build; now: number }) {
       )}
 
       <LogTabs build={build} />
+
+      <BuildActions build={build} dep={dep} />
     </>
+  );
+}
+
+/// Live deployment status — the *current* truth, not the build outcome. `live`
+/// means the sprite is up (the URL works); `removed` means it's gone (the URL is
+/// dead); `unknown` means we couldn't reach sprites.dev, so we don't claim either.
+function DeploymentBadge({ build, dep }: { build: Build; dep?: DeploymentStatus }) {
+  if (build.status !== "succeeded") return <span className="muted">—</span>;
+  const removed = dep?.state === "removed" || deploymentRemoved(build);
+  if (removed) return <span style={{ color: "var(--red)" }}>✗ removed</span>;
+  if (!dep) return <span className="muted">checking…</span>;
+  if (dep.state === "live") return <span style={{ color: "var(--green)" }}>● running</span>;
+  if (dep.state === "none") return <span className="muted">none</span>;
+  return <span className="muted">unknown</span>;
+}
+
+/// The deployment URL row. When the sprite is gone we deliberately do NOT render a
+/// live link to a dead URL (which just serves the sprites.dev "private"
+/// placeholder); we mark it removed and point at Redeploy instead.
+function DeploymentUrl({ build, dep }: { build: Build; dep?: DeploymentStatus }) {
+  const removed = dep?.state === "removed" || deploymentRemoved(build);
+
+  if (!build.url) {
+    return <Stat k="URL" v="—" block />;
+  }
+
+  if (removed) {
+    return (
+      <Stat
+        k="URL"
+        v={
+          <div>
+            <span className="mono" style={{ textDecoration: "line-through", opacity: 0.6 }}>
+              {build.url}
+            </span>
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              Deployment removed — the sprite no longer exists. Redeploy to bring it back.
+            </div>
+          </div>
+        }
+        block
+      />
+    );
+  }
+
+  return (
+    <Stat
+      k="URL"
+      v={
+        <>
+          <a href={build.url} target="_blank" rel="noreferrer">
+            {build.url}
+          </a>
+          <UrlVisibilityControl build={build} />
+        </>
+      }
+      block
+    />
+  );
+}
+
+/// Redeploy (rebuild the same commit) and Delete (tear down the sprite + remove
+/// the build row). Shown once the build reaches a terminal state. Redeploy is the
+/// answer to a removed deployment; Delete is the missing way to clear out a dead
+/// or throwaway build instead of leaving it dangling forever.
+function BuildActions({ build, dep }: { build: Build; dep?: DeploymentStatus }) {
+  const navigate = useNavigate();
+  const create = useBuilds((s) => s.create);
+  const remove = useBuilds((s) => s.remove);
+  const [busy, setBusy] = useState<"redeploy" | "delete" | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (isActive(build)) return null;
+
+  const removed = dep?.state === "removed" || deploymentRemoved(build);
+
+  const redeploy = async () => {
+    setBusy("redeploy");
+    setErr(null);
+    try {
+      const b = await create(build.project_id, build.commit_sha);
+      navigate(`/builds/${b.id}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  };
+
+  const del = async () => {
+    if (!window.confirm("Delete this build and tear down its deployment? This can't be undone."))
+      return;
+    setBusy("delete");
+    setErr(null);
+    try {
+      await remove(build.id, build.project_id);
+      navigate(`/projects/${build.project_id}`);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="row" style={{ gap: 10, marginTop: 14, alignItems: "center" }}>
+      <button onClick={redeploy} disabled={busy !== null} style={{ whiteSpace: "nowrap" }}>
+        {busy === "redeploy" ? "Queuing…" : removed ? "Redeploy" : "Redeploy this commit"}
+      </button>
+      <button className="secondary" onClick={del} disabled={busy !== null}>
+        {busy === "delete" ? "Deleting…" : "Delete build"}
+      </button>
+      {err && <span style={{ color: "var(--red)", fontSize: 12 }}>{err}</span>}
+    </div>
   );
 }
 

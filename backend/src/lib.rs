@@ -126,7 +126,11 @@ pub fn build_router(state: AppState) -> Router {
             "/api/projects/:id/builds",
             get(projects::list_builds).post(projects::create_build),
         )
-        .route("/api/builds/:id", get(projects::get_build))
+        .route(
+            "/api/builds/:id",
+            get(projects::get_build).delete(projects::delete_build),
+        )
+        .route("/api/builds/:id/deployment", get(projects::deployment_status))
         .route("/api/builds/:id/runtime-logs", get(projects::runtime_logs))
         .route(
             "/api/builds/:id/url-visibility",
